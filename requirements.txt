@@ -1,0 +1,34 @@
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+pydantic==2.10.0
+python-dotenv
+
+# Core dependencies - install first
+numpy
+torch
+torchaudio
+
+# Additional dependencies
+ffmpeg-python
+boto3
+mysql-connector-python
+requests
+
+# LLM for analysis (optional but recommended)
+transformers
+accelerate
+huggingface-hub
+
+# PII Detection and Redaction
+presidio-analyzer
+presidio-anonymizer
+soundfile
+scipy
+spacy
+
+# WhisperX - install last after dependencies
+git+https://github.com/m-bain/whisperx.git
+
+# Optional for better diarization (requires HuggingFace token)
+# pyannote.audio==3.1.0

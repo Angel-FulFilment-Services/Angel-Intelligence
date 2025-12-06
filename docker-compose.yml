@@ -1,0 +1,34 @@
+version: '3.8'
+
+services:
+  ai-worker:
+    build: .
+    environment:
+      # Database
+      - AI_DB_HOST=your-db-host
+      - AI_DB_PORT=3306
+      - AI_DB_DATABASE=ai_calls
+      - AI_DB_USERNAME=root
+      - AI_DB_PASSWORD=your-password
+      
+      # R2 Storage
+      - R2_ENDPOINT=https://your-account.r2.cloudflarestorage.com
+      - R2_ACCESS_KEY_ID=your-key
+      - R2_SECRET_ACCESS_KEY=your-secret
+      - R2_BUCKET=call-recordings
+      
+      # Worker settings
+      - POLL_INTERVAL=30
+      - CUDA_VISIBLE_DEVICES=0
+      
+    volumes:
+      - ./models:/root/.cache  # Cache models
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    command: python worker.py
