@@ -117,22 +117,34 @@ class CallProcessingWorker:
         self.llm = None
         llm_model_path = os.getenv('LLM_MODEL_PATH', '')
         if LLM_AVAILABLE and llm_model_path:
-            # Auto-download if path doesn't exist
-            if not os.path.exists(llm_model_path):
-                self._download_llm_model(llm_model_path)
-            
-            if os.path.exists(llm_model_path):
-                try:
-                    logger.info(f"Loading LLM from {llm_model_path}")
+            try:
+                logger.info(f"Loading LLM model: {llm_model_path}")
+                
+                # Check if it's a local path or HuggingFace repo
+                if os.path.exists(llm_model_path):
+                    # Local path - use directly
+                    logger.info(f"Loading LLM from local path: {llm_model_path}")
+                    model_to_load = llm_model_path
+                elif '/' in llm_model_path:
+                    # HuggingFace repo format (e.g., "Qwen/Qwen2.5-3B-Instruct")
+                    logger.info(f"Loading LLM from HuggingFace: {llm_model_path}")
+                    model_to_load = llm_model_path  # Pipeline will auto-download
+                else:
+                    logger.warning(f"Invalid LLM_MODEL_PATH format: {llm_model_path}")
+                    model_to_load = None
+                
+                if model_to_load:
                     self.llm = pipeline(
                         "text-generation",
-                        model=llm_model_path,
+                        model=model_to_load,
                         device=0 if self.device == "cuda" else -1,
-                        max_new_tokens=512
+                        max_new_tokens=512,
+                        trust_remote_code=True  # Required for some models like Qwen
                     )
-                    logger.info("LLM loaded successfully")
-                except Exception as e:
-                    logger.warning(f"Failed to load LLM: {e}, using basic analysis")
+                    logger.info(f"LLM loaded successfully: {model_to_load}")
+            except Exception as e:
+                logger.warning(f"Failed to load LLM: {e}, using basic analysis")
+                self.llm = None
         else:
             logger.info("No LLM model configured, using basic analysis")
         
@@ -351,13 +363,16 @@ class CallProcessingWorker:
                 return_char_alignments=False
             )
             
-            # Extract word-level segments if available
-            if "word_segments" in result:
+            # Check segmentation preference from environment
+            segmentation = os.getenv('TRANSCRIPT_SEGMENTATION', 'word').lower()
+            
+            # Extract word-level segments if available and requested
+            if segmentation == 'word' and "word_segments" in result:
                 # Use word-level timestamps
                 logger.info(f"Using word-level timestamps: {len(result['word_segments'])} words")
                 result["segments"] = result["word_segments"]
-            elif "segments" in result and len(result["segments"]) > 0:
-                # Check if segments have word-level data
+            elif segmentation == 'word' and "segments" in result and len(result["segments"]) > 0:
+                # Check if segments have word-level data embedded
                 if "words" in result["segments"][0]:
                     # Flatten words into individual segments
                     word_segments = []
@@ -373,6 +388,9 @@ class CallProcessingWorker:
                     if word_segments:
                         logger.info(f"Extracted {len(word_segments)} word-level segments")
                         result["segments"] = word_segments
+            else:
+                # Use sentence-level segments (default from WhisperX)
+                logger.info(f"Using sentence-level timestamps: {len(result['segments'])} segments")
         
         # Simple speaker diarization (alternating based on gaps)
         current_speaker = 0
@@ -423,134 +441,176 @@ class CallProcessingWorker:
             return self._analyze_basic(full_text, speaker_metrics)
     
     def _analyze_with_llm(self, full_text: str, speaker_metrics: dict):
-        """Analyze using LLM"""
-        logger.info("Using LLM for analysis")
-        
-        # Get model name for tracking
-        model_name = getattr(self.llm.model, 'name_or_path', 'unknown-llm')
-        if '/' in model_name:
-            model_name = model_name.split('/')[-1]
-        
-        # Truncate text if too long
-        max_chars = 1500
-        text_sample = full_text[:max_chars]
-        if len(full_text) > max_chars:
-            text_sample += "..."
-        
-        prompt = """<|system|>
-You are a call quality analyst evaluating agent performance during a call to a charity supporter. </s>
-<|user|>
-Read this call transcript and create a JSON summary, focus on the agent's performance.
+    """Multi-pass LLM analysis: extraction pass + scoring pass"""
+    logger.info("Using multi-pass LLM analysis")
 
-TRANSCRIPT:
-{}
+    # Get model name
+    model_name = getattr(self.llm.model, 'name_or_path', 'unknown-llm')
+    if '/' in model_name:
+        model_name = model_name.split('/')[-1]
 
-Create a JSON object with:
-1. "summary" - describe what the agent did in 2,3 sentences and their performance
-2. "sentiment" - rate agent performance as a number: 10=excellent, 5=good, 0=average, -5=poor, -10=terrible
-3. "topics" - list the subjects discussed (billing, product inquiry, complaint, etc)
-4. "actions" - list what the agent actually did (sent package, scheduled callback, processed refund, etc)
-5. "concerns" - list any issues (rude tone, didn't listen, unclear, etc) or empty array if none
+    # Trim transcript for safety
+    max_chars = 3000  # pass 1 can handle longer input
+    transcript = full_text[:max_chars]
+    if len(full_text) > max_chars:
+        transcript += "..."
 
-Reply ONLY with the JSON object, no other text.</s>
-<|assistant|>
-""".format(text_sample)
-        
-        try:
-            result = self.llm(prompt, max_new_tokens=500, temperature=0.5, do_sample=True, top_p=0.9)
-            response_text = result[0]['generated_text']
-            
-            # Log the full response for debugging
-            logger.info(f"=== FULL LLM RESPONSE ===")
-            logger.info(response_text)
-            logger.info(f"=== END LLM RESPONSE ===")
-            
-            # Extract JSON
-            import json
-            import re
-            
-            # Find JSON object
-            open_brace = '{'
-            close_brace = '}'
-            first_brace = response_text.find(open_brace)
-            last_brace = response_text.rfind(close_brace)
-            
-            if first_brace != -1 and last_brace != -1 and last_brace > first_brace:
-                json_str = response_text[first_brace:last_brace+1]
-                try:
-                    analysis = json.loads(json_str)
-                    logger.info(f"Successfully parsed JSON: {analysis}")
-                    
-                    # Validate and clean the response
-                    summary = analysis.get("summary", f"Call with {len(speaker_metrics)} speakers")
-                    if isinstance(summary, str) and len(summary) > 10:
-                        summary = summary[:500]
-                    else:
-                        summary = f"Call with {len(speaker_metrics)} speakers"
-                    
-                    # Parse sentiment - handle string or number
-                    sentiment_raw = analysis.get("sentiment", 0)
-                    try:
-                        sentiment = float(sentiment_raw)
-                    except (ValueError, TypeError):
-                        # Handle text sentiments - convert to numbers
-                        sentiment_text = str(sentiment_raw).lower()
-                        if 'very positive' in sentiment_text or 'excellent' in sentiment_text:
-                            sentiment = 8
-                        elif 'positive' in sentiment_text or 'good' in sentiment_text:
-                            sentiment = 5
-                        elif 'neutral' in sentiment_text or 'okay' in sentiment_text:
-                            sentiment = 0
-                        elif 'negative' in sentiment_text or 'poor' in sentiment_text:
-                            sentiment = -5
-                        elif 'very negative' in sentiment_text or 'terrible' in sentiment_text:
-                            sentiment = -8
-                        else:
-                            # Try to extract number from string
-                            match = re.search(r'-?\d+', str(sentiment_raw))
-                            sentiment = float(match.group()) if match else 0
-                    
-                    # Ensure lists
-                    topics = analysis.get("topics", [])
-                    if isinstance(topics, str):
-                        topics = [t.strip() for t in topics.split(',')]
-                    topics = list(topics)[:10] if isinstance(topics, list) else []
-                    
-                    actions = analysis.get("actions", [])
-                    if isinstance(actions, str):
-                        actions = [a.strip() for a in actions.split(',')]
-                    actions = list(actions)[:10] if isinstance(actions, list) else []
-                    
-                    concerns = analysis.get("concerns", [])
-                    if isinstance(concerns, str):
-                        concerns = [c.strip() for c in concerns.split(',')]
-                    concerns = list(concerns)[:10] if isinstance(concerns, list) else []
-                    
-                    return {
-                        "summary": summary,
-                        "sentiment_score": max(-10, min(10, sentiment)),
-                        "speaker_metrics": speaker_metrics,
-                        "quality_score": 85.0,
-                        "key_topics": topics,
-                        "action_items": actions,
-                        "compliance_flags": concerns,
-                        "model_used": model_name
-                    }
-                except json.JSONDecodeError as e:
-                    logger.warning(f"JSON parse error: {e}, json_str: {json_str[:200]}")
-            
-            # Fallback
-            logger.warning("Using fallback extraction")
-            return self._extract_analysis_fallback(response_text, speaker_metrics, model_name)
-            
-            # If JSON parsing failed, extract what we can
-            logger.warning("Failed to parse JSON, using fallback extraction")
-            return self._extract_analysis_fallback(response_text, speaker_metrics, model_name)
-            
-        except Exception as e:
-            logger.error(f"LLM analysis failed: {e}, falling back to basic")
-            return self._analyze_basic(full_text, speaker_metrics)
-    
+    # ------------------------------------------------------------
+    # PASS 1 — Extract structured facts
+    # ------------------------------------------------------------
+
+    pass1_prompt = f"""
+    <|system|>
+    You are a specialist call-quality analyst for charity and supporter-engagement calls.
+    Your job is to extract accurate *facts only* from the transcript.
+    Do NOT generate opinions, summaries, or scores.
+    </s>
+
+    <|user|>
+    Extract structured information from this call transcript.
+    The call may involve charity donations, supporter conversion, free-gift fulfilment, complaints, address capture, card payments, or general supporter enquiries.
+
+    TRANSCRIPT:
+    {transcript}
+
+    Return ONLY this JSON object (no commentary):
+
+    {
+    "agent_actions": [],   
+    "call_topics": [],     
+    "issues_or_concerns": [],
+    "objective_outcome": "" 
+    }
+
+    ### FIELD DEFINITIONS
+    - "agent_actions" → list of concrete actions the agent performed  
+    e.g., ["captured mailing address", "processed donation", "attempted supporter conversion", "resolved complaint", "verified identity", "scheduled callback"]
+
+    - "call_topics" → list of subjects discussed  
+    e.g., ["donation request", "free-gift fulfilment", "charity mission info", "card payment", "address update", "cancellation", "complaint"]
+
+    - "issues_or_concerns" → any problems  
+    e.g., ["agent interrupted caller", "unclear explanation", "pushy tone", "long hold", "customer frustration"]  
+    or empty list
+
+    - "objective_outcome" → what happened in the end (factual only)  
+    e.g., "donation completed", "no donation", "address updated", "supporter declined", "complaint resolved"
+
+    Output ONLY valid JSON.
+    </s>
+    <|assistant|>
+    """
+
+    # Run first pass
+    try:
+        logger.info("Running Pass 1 (extraction)")
+        pass1_result = self.llm(pass1_prompt, max_new_tokens=400, temperature=0.0)
+        pass1_text = pass1_result[0]["generated_text"]
+        logger.info("=== PASS 1 RESPONSE ===")
+        logger.info(pass1_text)
+
+        # Extract JSON
+        import json, re
+        p1_first = pass1_text.find("{")
+        p1_last = pass1_text.rfind("}")
+        if p1_first == -1 or p1_last == -1:
+            raise ValueError("Pass 1 did not return JSON")
+
+        pass1_json_str = pass1_text[p1_first:p1_last+1]
+        pass1_data = json.loads(pass1_json_str)
+
+    except Exception as e:
+        logger.error(f"Pass 1 failed: {e}")
+        return self._extract_analysis_fallback("Pass 1 failed", speaker_metrics, model_name)
+
+    # ------------------------------------------------------------
+    # PASS 2 — Score + summarise using Pass 1 output
+    # ------------------------------------------------------------
+
+    pass1_json_clean = json.dumps(pass1_data, ensure_ascii=False)
+
+    pass2_prompt = f"""
+    <|system|>
+    You are a call-quality scoring assistant that evaluates charity-supporter calls.
+    You will analyse extracted call events and produce a scored JSON summary.
+    </s>
+
+    <|user|>
+    Create a JSON summary evaluating the agent's performance.
+
+    DATA FROM PASS 1:
+    {pass1_json_clean}
+
+    Create a JSON object with these fields:
+
+    {
+    "summary": "",            // 2–3 sentence description of agent performance
+    "sentiment": 0,           // -10 to +10 scale (see mapping below)
+    "topics": [],             // from call_topics
+    "actions": [],            // from agent_actions
+    "concerns": []            // from issues_or_concerns
+    }
+
+    ### SCORING SCALE
+    Rate *agent performance*, not caller mood:
+
+    +10 = excellent: empathetic, efficient, clear, positive, handled objections well  
+    +5  = good: generally effective, minor issues  
+    0   = average: neutral, basic competence  
+    -5  = poor: pushy, unclear, slow, or made mistakes  
+    -10 = unacceptable: rude, unprofessional, failed key steps
+
+    Reply ONLY with the JSON object.
+    </s>
+    <|assistant|>
+    """
+
+    # Run second pass
+    try:
+        logger.info("Running Pass 2 (scoring)")
+        pass2_result = self.llm(pass2_prompt, max_new_tokens=400, temperature=0.2)
+        pass2_text = pass2_result[0]["generated_text"]
+
+        logger.info("=== PASS 2 RESPONSE ===")
+        logger.info(pass2_text)
+
+        # Extract JSON
+        p2_first = pass2_text.find("{")
+        p2_last = pass2_text.rfind("}")
+        if p2_first == -1 or p2_last == -1:
+            raise ValueError("Pass 2 did not return JSON")
+
+        pass2_json_str = pass2_text[p2_first:p2_last+1]
+        summary_data = json.loads(pass2_json_str)
+
+    except Exception as e:
+        logger.error(f"Pass 2 failed: {e}")
+        return self._extract_analysis_fallback(pass2_text, speaker_metrics, model_name)
+
+    # ------------------------------------------------------------
+    # FINAL STRUCTURED OUTPUT (matches your return format)
+    # ------------------------------------------------------------
+
+    sentiment_raw = summary_data.get("sentiment", 0)
+    try:
+        sentiment = float(sentiment_raw)
+    except:
+        sentiment = 0
+
+    # Bound sentiment
+    sentiment = max(-10, min(10, sentiment))
+
+    return {
+        "summary": summary_data.get("summary", ""),
+        "sentiment_score": sentiment,
+        "speaker_metrics": speaker_metrics,
+        "quality_score": 85.0,  # your existing field
+        "key_topics": summary_data.get("topics", []),
+        "action_items": summary_data.get("actions", []),
+        "compliance_flags": summary_data.get("concerns", []),
+        "model_used": model_name
+    }
+
     def _extract_analysis_fallback(self, response_text: str, speaker_metrics: dict, model_name: str):
         """Extract analysis from non-JSON LLM response"""
         import re
@@ -618,15 +678,35 @@ Reply ONLY with the JSON object, no other text.</s>
             # Get full text
             full_text = " ".join([s.get("text", s.get("word", "")) for s in transcript["segments"]])
             
-            # Analyze for PII
+            # Add custom UK bank account recognizer
+            from presidio_analyzer import Pattern, PatternRecognizer
+            
+            # UK bank accounts: 8 digits (account) + 6 digits (sort code)
+            # Patterns: 12345678 or 12-34-56 12345678 or 12345678 123456
+            uk_bank_patterns = [
+                Pattern(name="uk_account_sort", regex=r"\b\d{2}[-\s]?\d{2}[-\s]?\d{2}\s+\d{8}\b", score=0.85),
+                Pattern(name="uk_account_number", regex=r"\b\d{8}\b", score=0.4),  # Lower score as it's generic
+                Pattern(name="uk_sort_code", regex=r"\b\d{2}[-\s]\d{2}[-\s]\d{2}\b", score=0.5),
+            ]
+            
+            uk_bank_recognizer = PatternRecognizer(
+                supported_entity="UK_BANK_ACCOUNT",
+                patterns=uk_bank_patterns,
+                context=["account", "bank", "sort code", "account number", "banking"]
+            )
+            
+            # Register the custom recognizer
+            self.pii_analyzer.registry.add_recognizer(uk_bank_recognizer)
+            
+            # Analyze for PII - removed unsupported UK entity types
             pii_results = self.pii_analyzer.analyze(
                 text=full_text,
                 language='en',
                 entities=[
                     "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD",
                     "UK_NHS", "IBAN_CODE", "NRP", "MEDICAL_LICENSE",
-                    "URL", "UK_BANK_NUMBER",
-                    "IP_ADDRESS", "UK_PASSPORT", "UK_DRIVER_LICENSE",
+                    "URL", "IP_ADDRESS", "LOCATION",
+                    "UK_BANK_ACCOUNT", "PERSON"  # Our custom recognizer
                 ]
             )
             

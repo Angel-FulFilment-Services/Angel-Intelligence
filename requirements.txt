@@ -6,8 +6,9 @@ python-dotenv
 
 # Core dependencies - install first
 numpy
-torch
-torchaudio
+torch==2.6.0+cu124
+torchaudio==2.6.0+cu124
+--extra-index-url https://download.pytorch.org/whl/cu124
 
 # Additional dependencies
 ffmpeg-python
