@@ -24,6 +24,7 @@ from mysql.connector import pooling
 import torch
 import tempfile
 import gc
+import json
 
 # Monkey-patch lightning to use weights_only=False for PyTorch 2.6+
 # This is needed for pyannote.audio models to load correctly
@@ -440,176 +441,200 @@ class CallProcessingWorker:
         else:
             return self._analyze_basic(full_text, speaker_metrics)
     
-    def _analyze_with_llm(self, full_text: str, speaker_metrics: dict):
-    """Multi-pass LLM analysis: extraction pass + scoring pass"""
-    logger.info("Using multi-pass LLM analysis")
+    def _analyze_with_llm(self, full_text: str, speaker_metrics: dict, config_path="call_analysis_config.json"):
+        """Multi-pass LLM analysis with external JSON config for topics, actions, and rubric"""
+        logger.info("Using multi-pass LLM analysis with JSON config")
 
-    # Get model name
-    model_name = getattr(self.llm.model, 'name_or_path', 'unknown-llm')
-    if '/' in model_name:
-        model_name = model_name.split('/')[-1]
+        # Load JSON config
+        if not os.path.exists(config_path):
+            logger.error(f"Config file not found: {config_path}")
+            return self._extract_analysis_fallback("Config missing", speaker_metrics, "unknown-llm")
+        
+        with open(config_path, "r", encoding="utf-8") as f:
+            config = json.load(f)
 
-    # Trim transcript for safety
-    max_chars = 3000  # pass 1 can handle longer input
-    transcript = full_text[:max_chars]
-    if len(full_text) > max_chars:
-        transcript += "..."
+        topics = config.get("topics", [])
+        actions = config.get("agent_actions", [])
+        rubric = config.get("performance_rubric", [])
 
-    # ------------------------------------------------------------
-    # PASS 1 — Extract structured facts
-    # ------------------------------------------------------------
+        # Get model name
+        model_name = getattr(self.llm.model, 'name_or_path', 'unknown-llm')
+        if '/' in model_name:
+            model_name = model_name.split('/')[-1]
 
-    pass1_prompt = f"""
-    <|system|>
-    You are a specialist call-quality analyst for charity and supporter-engagement calls.
-    Your job is to extract accurate *facts only* from the transcript.
-    Do NOT generate opinions, summaries, or scores.
-    </s>
+        # Trim transcript
+        max_chars = 3000
+        transcript = full_text[:max_chars]
+        if len(full_text) > max_chars:
+            transcript += "..."
 
-    <|user|>
-    Extract structured information from this call transcript.
-    The call may involve charity donations, supporter conversion, free-gift fulfilment, complaints, address capture, card payments, or general supporter enquiries.
+        # -------------------------------
+        # PASS 1 — Extract structured facts
+        # -------------------------------
+        pass1_prompt = f"""
+        <|system|>
+        You are a specialist call-quality analyst for charity and supporter-engagement calls.
+        Your job is to extract accurate *facts only* from the transcript.
+        Do NOT generate opinions, summaries, or scores.
+        </s>
 
-    TRANSCRIPT:
-    {transcript}
+        <|user|>
+        Extract structured information from this call transcript.
+        Use ONLY these topics (You can use multiple if needed): {topics}
+        Use ONLY these actions (You can use multiple if needed): {actions}
 
-    Return ONLY this JSON object (no commentary):
+        TRANSCRIPT:
+        {transcript}
 
-    {
-    "agent_actions": [],   
-    "call_topics": [],     
-    "issues_or_concerns": [],
-    "objective_outcome": "" 
-    }
+        Return ONLY a valid JSON object and add no extra text.
 
-    ### FIELD DEFINITIONS
-    - "agent_actions" → list of concrete actions the agent performed  
-    e.g., ["captured mailing address", "processed donation", "attempted supporter conversion", "resolved complaint", "verified identity", "scheduled callback"]
+        {{
+        "agent_actions": [],
+        "call_topics": [],
+        "issues_or_concerns": [],
+        "objective_outcome": ""
+        }}
+        </s>
+        <|assistant|>
+        """
 
-    - "call_topics" → list of subjects discussed  
-    e.g., ["donation request", "free-gift fulfilment", "charity mission info", "card payment", "address update", "cancellation", "complaint"]
+        try:
+            logger.info("Running Pass 1 (extraction)")
+            pass1_result = self.llm(pass1_prompt, max_new_tokens=400, do_sample=False)
+            pass1_text = pass1_result[0]["generated_text"]
+            
+            # Remove the prompt from the generated text to get only the model's response
+            # The model returns prompt + generated tokens, we only want the new part
+            if pass1_text.startswith(pass1_prompt):
+                pass1_text = pass1_text[len(pass1_prompt):].strip()
+            
+            logger.info("=== PASS 1 RESPONSE ===")
+            logger.info(pass1_text)
 
-    - "issues_or_concerns" → any problems  
-    e.g., ["agent interrupted caller", "unclear explanation", "pushy tone", "long hold", "customer frustration"]  
-    or empty list
+            p1_first = pass1_text.find("{")
+            p1_last = pass1_text.rfind("}")
+            if p1_first == -1 or p1_last == -1:
+                raise ValueError("Pass 1 did not return JSON")
 
-    - "objective_outcome" → what happened in the end (factual only)  
-    e.g., "donation completed", "no donation", "address updated", "supporter declined", "complaint resolved"
+            pass1_json_str = pass1_text[p1_first:p1_last+1]
+            pass1_data = json.loads(pass1_json_str)
+        except Exception as e:
+            logger.error(f"Pass 1 failed: {e}")
+            return self._extract_analysis_fallback("Pass 1 failed", speaker_metrics, model_name)
 
-    Output ONLY valid JSON.
-    </s>
-    <|assistant|>
-    """
+        # ------------------------------------------------------------
+        # PASS 2 — Score + summarise using Pass 1 output
+        # ------------------------------------------------------------
 
-    # Run first pass
-    try:
-        logger.info("Running Pass 1 (extraction)")
-        pass1_result = self.llm(pass1_prompt, max_new_tokens=400, temperature=0.0)
-        pass1_text = pass1_result[0]["generated_text"]
-        logger.info("=== PASS 1 RESPONSE ===")
-        logger.info(pass1_text)
+        pass1_json_clean = json.dumps(pass1_data, ensure_ascii=False)
 
-        # Extract JSON
-        import json, re
-        p1_first = pass1_text.find("{")
-        p1_last = pass1_text.rfind("}")
-        if p1_first == -1 or p1_last == -1:
-            raise ValueError("Pass 1 did not return JSON")
+        pass2_prompt = f"""
+        <|system|>
+        You are a call-quality scoring assistant that evaluates charity-supporter calls.
+        You will analyse extracted call events and produce a scored JSON summary.
+        Use ONLY the provided rubric: {rubric}
+        </s>
 
-        pass1_json_str = pass1_text[p1_first:p1_last+1]
-        pass1_data = json.loads(pass1_json_str)
+        <|user|>
+        Create a JSON summary evaluating the agent's performance.
 
-    except Exception as e:
-        logger.error(f"Pass 1 failed: {e}")
-        return self._extract_analysis_fallback("Pass 1 failed", speaker_metrics, model_name)
+        DATA FROM PASS 1:
+        {pass1_json_clean}
 
-    # ------------------------------------------------------------
-    # PASS 2 — Score + summarise using Pass 1 output
-    # ------------------------------------------------------------
+        Return ONLY a valid JSON object and add no extra text.
 
-    pass1_json_clean = json.dumps(pass1_data, ensure_ascii=False)
+        {{
+        "summary": "",            
+        "sentiment": 0,           
+        "quality_score": 0,       
+        "topics": [],             
+        "actions": [],            
+        "concerns": []            
+        }}
 
-    pass2_prompt = f"""
-    <|system|>
-    You are a call-quality scoring assistant that evaluates charity-supporter calls.
-    You will analyse extracted call events and produce a scored JSON summary.
-    </s>
+        ### SENTIMENT SCORING SCALE
+        Rate *agent performance*, not caller mood:
 
-    <|user|>
-    Create a JSON summary evaluating the agent's performance.
+        +10 = excellent: empathetic, efficient, clear, positive, handled objections well  
+        +5  = good: generally effective, minor issues  
+        0   = average: neutral, basic competence  
+        -5  = poor: pushy, unclear, slow, or made mistakes  
+        -10 = unacceptable: rude, unprofessional, failed key steps
 
-    DATA FROM PASS 1:
-    {pass1_json_clean}
+        ### Quaility Score
+        Map sentiment to quality score out of 100 as follows:
+        - Sentiment 8 to 10 = 95 to 100
+        - Sentiment 5 to 7 = 85 to 94
+        - Sentiment 2 to 4 = 70 to 84
+        - Sentiment -1 to 1 = 50 to 69
+        - Sentiment -4 to -2 = 30 to 49
+        - Sentiment -7 to -5 = 10 to 29
+        - Sentiment -10 to -8 = 0 to 9
 
-    Create a JSON object with these fields:
+        Reply ONLY with the JSON object.
+        </s>
+        <|assistant|>
+        """
 
-    {
-    "summary": "",            // 2–3 sentence description of agent performance
-    "sentiment": 0,           // -10 to +10 scale (see mapping below)
-    "topics": [],             // from call_topics
-    "actions": [],            // from agent_actions
-    "concerns": []            // from issues_or_concerns
-    }
+        try:
+            logger.info("Running Pass 2 (scoring)")
+            pass2_result = self.llm(pass2_prompt, max_new_tokens=400, temperature=0.2)
+            pass2_text = pass2_result[0]["generated_text"]
+            
+            # Remove the prompt from the generated text to get only the model's response
+            if pass2_text.startswith(pass2_prompt):
+                pass2_text = pass2_text[len(pass2_prompt):].strip()
+            
+            logger.info("=== PASS 2 RESPONSE ===")
+            logger.info(pass2_text)
 
-    ### SCORING SCALE
-    Rate *agent performance*, not caller mood:
+            p2_first = pass2_text.find("{")
+            p2_last = pass2_text.rfind("}")
+            if p2_first == -1 or p2_last == -1:
+                raise ValueError("Pass 2 did not return JSON")
 
-    +10 = excellent: empathetic, efficient, clear, positive, handled objections well  
-    +5  = good: generally effective, minor issues  
-    0   = average: neutral, basic competence  
-    -5  = poor: pushy, unclear, slow, or made mistakes  
-    -10 = unacceptable: rude, unprofessional, failed key steps
+            pass2_json_str = pass2_text[p2_first:p2_last+1]
+            summary_data = json.loads(pass2_json_str)
+        except Exception as e:
+            logger.error(f"Pass 2 failed: {e}")
+            return self._extract_analysis_fallback(pass2_text, speaker_metrics, model_name)
 
-    Reply ONLY with the JSON object.
-    </s>
-    <|assistant|>
-    """
+        # -------------------------------
+        # Final output
+        # -------------------------------
+        sentiment_raw = summary_data.get("sentiment", 0)
+        try:
+            sentiment = float(sentiment_raw)
+        except:
+            sentiment = 0
+        sentiment = max(-10, min(10, sentiment))
 
-    # Run second pass
-    try:
-        logger.info("Running Pass 2 (scoring)")
-        pass2_result = self.llm(pass2_prompt, max_new_tokens=400, temperature=0.2)
-        pass2_text = pass2_result[0]["generated_text"]
+        quality_score = 0
+        if sentiment >= 8:
+            quality_score = 95 + (sentiment - 8) * 2.5
+        elif sentiment >= 5:
+            quality_score = 85 + (sentiment - 5) * 3
+        elif sentiment >= 2:
+            quality_score = 70 + (sentiment - 2) * 4.67
+        elif sentiment >= -1:
+            quality_score = 50 + (sentiment + 1) * 6.33
+        elif sentiment >= -4:
+            quality_score = 30 + (sentiment + 4) * 6.33
+        elif sentiment >= -7:
+            quality_score = 10 + (sentiment + 7) * 6.33
+        else:
+            quality_score = max(0, min(9, (sentiment + 10) * 3))
 
-        logger.info("=== PASS 2 RESPONSE ===")
-        logger.info(pass2_text)
-
-        # Extract JSON
-        p2_first = pass2_text.find("{")
-        p2_last = pass2_text.rfind("}")
-        if p2_first == -1 or p2_last == -1:
-            raise ValueError("Pass 2 did not return JSON")
-
-        pass2_json_str = pass2_text[p2_first:p2_last+1]
-        summary_data = json.loads(pass2_json_str)
-
-    except Exception as e:
-        logger.error(f"Pass 2 failed: {e}")
-        return self._extract_analysis_fallback(pass2_text, speaker_metrics, model_name)
-
-    # ------------------------------------------------------------
-    # FINAL STRUCTURED OUTPUT (matches your return format)
-    # ------------------------------------------------------------
-
-    sentiment_raw = summary_data.get("sentiment", 0)
-    try:
-        sentiment = float(sentiment_raw)
-    except:
-        sentiment = 0
-
-    # Bound sentiment
-    sentiment = max(-10, min(10, sentiment))
-
-    return {
-        "summary": summary_data.get("summary", ""),
-        "sentiment_score": sentiment,
-        "speaker_metrics": speaker_metrics,
-        "quality_score": 85.0,  # your existing field
-        "key_topics": summary_data.get("topics", []),
-        "action_items": summary_data.get("actions", []),
-        "compliance_flags": summary_data.get("concerns", []),
-        "model_used": model_name
-    }
+        return {
+            "summary": summary_data.get("summary", ""),
+            "sentiment_score": sentiment,
+            "speaker_metrics": speaker_metrics,
+            "quality_score": quality_score,
+            "key_topics": summary_data.get("topics", []),
+            "action_items": summary_data.get("actions", []),
+            "compliance_flags": summary_data.get("concerns", []),
+            "model_used": model_name
+        }
 
     def _extract_analysis_fallback(self, response_text: str, speaker_metrics: dict, model_name: str):
         """Extract analysis from non-JSON LLM response"""
@@ -705,8 +730,8 @@ class CallProcessingWorker:
                 entities=[
                     "EMAIL_ADDRESS", "PHONE_NUMBER", "CREDIT_CARD",
                     "UK_NHS", "IBAN_CODE", "NRP", "MEDICAL_LICENSE",
-                    "URL", "IP_ADDRESS", "LOCATION",
-                    "UK_BANK_ACCOUNT", "PERSON"  # Our custom recognizer
+                    "URL", "IP_ADDRESS", 
+                    "UK_BANK_ACCOUNT"
                 ]
             )
             
