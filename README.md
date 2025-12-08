@@ -68,29 +68,38 @@ You'll see:
 2025-12-05 10:01:00 - Processing recording 123: TEST-001
 ```
 
-## Kubernetes Deployment (4x Jetson Cluster)
+## Kubernetes Deployment (K3s Cluster)
 
-### 1. Build Docker Image
+See **[K3S_SETUP.md](K3S_SETUP.md)** for complete setup instructions.
 
-On each Jetson:
-```bash
-cd ai-service
-docker build -t ai-worker:latest .
-```
+### Quick Start
 
-### 2. Configure Environment
-
-Edit `docker-compose.yml` with your credentials.
-
-### 3. Deploy
+1. **Setup control plane** on HyperV VM (see K3S_SETUP.md Part 1)
+2. **Join Jetson workers** to cluster (see K3S_SETUP.md Part 2)
+3. **Deploy workers:**
 
 ```bash
-docker-compose up -d
+# Configure secrets
+cp k8s/secret.yaml.example k8s/secret.yaml
+# Edit k8s/secret.yaml with your credentials
+
+# Deploy
+./scripts/setup.sh   # Linux/Mac
+.\scripts\setup.ps1  # Windows
+
+# Scale workers (automatically distributes across available Jetsons)
+kubectl scale deployment ai-worker --replicas=4
 ```
 
-### 4. Scale Across Cluster
+### Add New Jetson Node
 
-Deploy same configuration on all 4 Jetsons. Workers will coordinate via database locking.
+```bash
+# On new Jetson - join cluster (see K3S_SETUP.md Part 2.1)
+# Then scale up:
+kubectl scale deployment ai-worker --replicas=5
+```
+
+Workers automatically coordinate via database locking.
 
 ## Testing
 

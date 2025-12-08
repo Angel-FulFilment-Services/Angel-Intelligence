@@ -1,0 +1,143 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: ai-worker
+  namespace: default
+  labels:
+    app: ai-worker
+spec:
+  # Scale this up/down based on number of available GPU nodes
+  replicas: 4
+  selector:
+    matchLabels:
+      app: ai-worker
+  template:
+    metadata:
+      labels:
+        app: ai-worker
+    spec:
+      # Ensure each worker runs on a different node with GPU
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchExpressions:
+                - key: app
+                  operator: In
+                  values:
+                  - ai-worker
+              topologyKey: kubernetes.io/hostname
+      
+      containers:
+      - name: ai-worker
+        image: localhost:5000/ai-worker:latest  # Change to your registry
+        imagePullPolicy: Always
+        
+        command: ["python", "worker.py"]
+        
+        env:
+        # Database configuration
+        - name: AI_DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: ai-worker-secrets
+              key: db-host
+        - name: AI_DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: ai-worker-secrets
+              key: db-port
+        - name: AI_DB_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: ai-worker-secrets
+              key: db-database
+        - name: AI_DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: ai-worker-secrets
+              key: db-username
+        - name: AI_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: ai-worker-secrets
+              key: db-password
+        
+        # R2 Storage configuration
+        - name: R2_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: ai-worker-secrets
+              key: r2-endpoint
+        - name: R2_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: ai-worker-secrets
+              key: r2-access-key-id
+        - name: R2_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: ai-worker-secrets
+              key: r2-secret-access-key
+        - name: R2_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: ai-worker-secrets
+              key: r2-bucket
+        
+        # Worker settings from ConfigMap
+        - name: POLL_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: ai-worker-config
+              key: poll-interval
+        - name: CUDA_VISIBLE_DEVICES
+          valueFrom:
+            configMapKeyRef:
+              name: ai-worker-config
+              key: cuda-visible-devices
+        - name: TRANSCRIPT_SEGMENTATION
+          valueFrom:
+            configMapKeyRef:
+              name: ai-worker-config
+              key: transcript-segmentation
+        - name: ENABLE_PII_REDACTION
+          valueFrom:
+            configMapKeyRef:
+              name: ai-worker-config
+              key: enable-pii-redaction
+        - name: LLM_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: ai-worker-config
+              key: llm-model-path
+        - name: LOCAL_STORAGE_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: ai-worker-config
+              key: local-storage-path
+        
+        resources:
+          limits:
+            nvidia.com/gpu: 1  # Request 1 GPU per worker
+          requests:
+            memory: "4Gi"
+            cpu: "2"
+        
+        volumeMounts:
+        - name: model-cache
+          mountPath: /root/.cache
+      
+      volumes:
+      - name: model-cache
+        hostPath:
+          path: /mnt/model-cache  # Persistent storage on each Jetson
+          type: DirectoryOrCreate
+      
+      # Only schedule on nodes with GPU
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      
+      restartPolicy: Always

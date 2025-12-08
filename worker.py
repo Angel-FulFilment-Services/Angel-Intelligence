@@ -543,6 +543,10 @@ class CallProcessingWorker:
 
         Return ONLY a valid JSON object and add no extra text.
 
+        Ensure you include the summary, sentiment score, quality score, topics, actions, and concerns.
+
+        You can use objective_outcome from Pass 1 to help inform the summary.
+
         {{
         "summary": "",            
         "sentiment": 0,           

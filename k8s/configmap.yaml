@@ -1,0 +1,24 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: ai-worker-config
+  namespace: default
+data:
+  # Worker polling interval in seconds
+  poll-interval: "30"
+  
+  # Transcription segmentation: "word" or "sentence"
+  transcript-segmentation: "word"
+  
+  # GPU Configuration (0 for first GPU, -1 for CPU only)
+  cuda-visible-devices: "0"
+  
+  # PII Redaction: "true" or "false"
+  enable-pii-redaction: "true"
+  
+  # LLM Model for analysis (HuggingFace model name or empty for basic analysis)
+  # Examples: Qwen/Qwen2.5-3B-Instruct, TinyLlama/TinyLlama-1.1B-Chat-v1.0
+  llm-model-path: ""
+  
+  # Local storage path (leave empty for production/R2, set path for dev/testing)
+  local-storage-path: ""
