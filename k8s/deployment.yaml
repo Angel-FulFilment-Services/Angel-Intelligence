@@ -1,22 +1,26 @@
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: ai-worker
+  name: angel-intelligence-batch-worker
   namespace: default
   labels:
-    app: ai-worker
+    app: angel-intelligence
+    component: batch-worker
 spec:
-  # Scale this up/down based on number of available GPU nodes
-  replicas: 4
+  # Scale batch workers based on call volume
+  # Adjust replicas as needed (more workers = more batch capacity)
+  replicas: 3
   selector:
     matchLabels:
-      app: ai-worker
+      app: angel-intelligence
+      component: batch-worker
   template:
     metadata:
       labels:
-        app: ai-worker
+        app: angel-intelligence
+        component: batch-worker
     spec:
-      # Ensure each worker runs on a different node with GPU
+      # Distribute workers across different nodes
       affinity:
         podAntiAffinity:
           preferredDuringSchedulingIgnoredDuringExecution:
@@ -27,113 +31,149 @@ spec:
                 - key: app
                   operator: In
                   values:
-                  - ai-worker
+                  - angel-intelligence
               topologyKey: kubernetes.io/hostname
       
       containers:
-      - name: ai-worker
-        image: localhost:5000/ai-worker:latest  # Change to your registry
+      - name: worker
+        image: localhost:5000/angel-intelligence:latest
         imagePullPolicy: Always
         
-        command: ["python", "worker.py"]
+        command: ["python", "-m", "src.worker.worker"]
         
         env:
+        # Environment
+        - name: ANGEL_ENV
+          value: "production"
+        - name: WORKER_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # Worker mode - batch for call processing
+        - name: WORKER_MODE
+          value: "batch"
+        
         # Database configuration
         - name: AI_DB_HOST
           valueFrom:
             secretKeyRef:
-              name: ai-worker-secrets
+              name: angel-intelligence-secrets
               key: db-host
         - name: AI_DB_PORT
           valueFrom:
             secretKeyRef:
-              name: ai-worker-secrets
+              name: angel-intelligence-secrets
               key: db-port
         - name: AI_DB_DATABASE
           valueFrom:
             secretKeyRef:
-              name: ai-worker-secrets
+              name: angel-intelligence-secrets
               key: db-database
         - name: AI_DB_USERNAME
           valueFrom:
             secretKeyRef:
-              name: ai-worker-secrets
+              name: angel-intelligence-secrets
               key: db-username
         - name: AI_DB_PASSWORD
           valueFrom:
             secretKeyRef:
-              name: ai-worker-secrets
+              name: angel-intelligence-secrets
               key: db-password
         
         # R2 Storage configuration
         - name: R2_ENDPOINT
           valueFrom:
             secretKeyRef:
-              name: ai-worker-secrets
+              name: angel-intelligence-secrets
               key: r2-endpoint
         - name: R2_ACCESS_KEY_ID
           valueFrom:
             secretKeyRef:
-              name: ai-worker-secrets
+              name: angel-intelligence-secrets
               key: r2-access-key-id
         - name: R2_SECRET_ACCESS_KEY
           valueFrom:
             secretKeyRef:
-              name: ai-worker-secrets
+              name: angel-intelligence-secrets
               key: r2-secret-access-key
         - name: R2_BUCKET
           valueFrom:
             secretKeyRef:
-              name: ai-worker-secrets
+              name: angel-intelligence-secrets
               key: r2-bucket
         
-        # Worker settings from ConfigMap
+        # Processing settings from ConfigMap
         - name: POLL_INTERVAL
           valueFrom:
             configMapKeyRef:
-              name: ai-worker-config
+              name: angel-intelligence-config
               key: poll-interval
-        - name: CUDA_VISIBLE_DEVICES
+        - name: ANALYSIS_MODE
           valueFrom:
             configMapKeyRef:
-              name: ai-worker-config
-              key: cuda-visible-devices
+              name: angel-intelligence-config
+              key: analysis-mode
+        - name: WHISPER_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: whisper-model
+        - name: ANALYSIS_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model
         - name: TRANSCRIPT_SEGMENTATION
           valueFrom:
             configMapKeyRef:
-              name: ai-worker-config
+              name: angel-intelligence-config
               key: transcript-segmentation
         - name: ENABLE_PII_REDACTION
           valueFrom:
             configMapKeyRef:
-              name: ai-worker-config
+              name: angel-intelligence-config
               key: enable-pii-redaction
-        - name: LLM_MODEL_PATH
+        
+        # PBX Sources
+        - name: PBX_LIVE_URL
           valueFrom:
             configMapKeyRef:
-              name: ai-worker-config
-              key: llm-model-path
-        - name: LOCAL_STORAGE_PATH
+              name: angel-intelligence-config
+              key: pbx-live-url
+        - name: PBX_ARCHIVE_URL
           valueFrom:
             configMapKeyRef:
-              name: ai-worker-config
-              key: local-storage-path
+              name: angel-intelligence-config
+              key: pbx-archive-url
+        
+        # GPU
+        - name: CUDA_VISIBLE_DEVICES
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: cuda-visible-devices
         
         resources:
           limits:
-            nvidia.com/gpu: 1  # Request 1 GPU per worker
+            nvidia.com/gpu: 1
           requests:
             memory: "4Gi"
             cpu: "2"
         
         volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
         - name: model-cache
           mountPath: /root/.cache
       
       volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: angel-intelligence-models
       - name: model-cache
         hostPath:
-          path: /mnt/model-cache  # Persistent storage on each Jetson
+          path: /mnt/model-cache
           type: DirectoryOrCreate
       
       # Only schedule on nodes with GPU
@@ -141,3 +181,112 @@ spec:
         nvidia.com/gpu: "true"
       
       restartPolicy: Always
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: angel-intelligence-api
+  namespace: default
+  labels:
+    app: angel-intelligence
+    component: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: angel-intelligence
+      component: api
+  template:
+    metadata:
+      labels:
+        app: angel-intelligence
+        component: api
+    spec:
+      containers:
+      - name: api
+        image: localhost:5000/angel-intelligence:latest
+        imagePullPolicy: Always
+        
+        command: ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
+        
+        ports:
+        - containerPort: 8000
+          name: http
+        
+        env:
+        - name: ANGEL_ENV
+          value: "production"
+        - name: API_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: api-auth-token
+        - name: AI_DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-host
+        - name: AI_DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-port
+        - name: AI_DB_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-database
+        - name: AI_DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-username
+        - name: AI_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-password
+        
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "500m"
+          limits:
+            memory: "1Gi"
+            cpu: "1"
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+      
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: angel-intelligence-api
+  namespace: default
+  labels:
+    app: angel-intelligence
+spec:
+  type: LoadBalancer
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: angel-intelligence
+    component: api

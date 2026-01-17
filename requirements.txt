@@ -1,35 +1,76 @@
+# ==============================================================================
+# Angel Intelligence - Python Dependencies
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# Web Framework
+# ------------------------------------------------------------------------------
 fastapi==0.115.0
 uvicorn[standard]==0.32.0
 python-multipart==0.0.12
 pydantic==2.10.0
+pydantic-settings>=2.0.0
 python-dotenv
 
-# Core dependencies - install first
-numpy>=2.0.2  # Required by whisperx for Python 3.12
-torch>=2.6.0  # Let whisperx determine compatible version
+# ------------------------------------------------------------------------------
+# Core Dependencies
+# ------------------------------------------------------------------------------
+numpy>=2.0.2
+torch>=2.6.0
 torchaudio>=2.6.0
 --extra-index-url https://download.pytorch.org/whl/cu124
 
-# Additional dependencies
+# ------------------------------------------------------------------------------
+# Audio Processing
+# ------------------------------------------------------------------------------
 ffmpeg-python
+soundfile
+scipy
+
+# ------------------------------------------------------------------------------
+# Storage and Database
+# ------------------------------------------------------------------------------
 boto3
 mysql-connector-python
 requests
 
-# LLM for analysis (optional but recommended)
-transformers
+# ------------------------------------------------------------------------------
+# LLM and AI Models
+# ------------------------------------------------------------------------------
+transformers>=4.40.0
 accelerate
 huggingface-hub
 
-# PII Detection and Redaction
+# ------------------------------------------------------------------------------
+# Audio LLM (Qwen2.5-Omni-7B)
+# Provides direct audio analysis for tone/emotion detection
+# ------------------------------------------------------------------------------
+# Install with:
+# pip install git+https://github.com/huggingface/transformers@v4.51.3-Qwen2.5-Omni-preview
+# pip install qwen-omni-utils[decord]
+
+# ------------------------------------------------------------------------------
+# PII Detection and Redaction (Presidio)
+# ------------------------------------------------------------------------------
 presidio-analyzer
 presidio-anonymizer
-soundfile
-scipy
-spacy>=3.7,<3.9  # Constrain spacy to versions with pre-built wheels
+spacy>=3.7,<3.9
 
-# WhisperX - install last after dependencies
+# Download spaCy model after install:
+# python -m spacy download en_core_web_lg
+
+# ------------------------------------------------------------------------------
+# Voice Fingerprinting / Speaker Identification
+# ------------------------------------------------------------------------------
+resemblyzer
+
+# ------------------------------------------------------------------------------
+# WhisperX - Speech Recognition
+# Install last after all other dependencies
+# ------------------------------------------------------------------------------
 git+https://github.com/m-bain/whisperx.git
 
-# Optional for better diarization (requires HuggingFace token)
+# ------------------------------------------------------------------------------
+# Optional: Speaker Diarisation (requires HuggingFace token)
+# ------------------------------------------------------------------------------
 # pyannote.audio==3.1.0

@@ -56,8 +56,15 @@
     "Updated payment method",
     "Recorded donation details",
     "Confirmed marketing consent preferences",
+    "Made initial donation ask",
     "Requested donation (one-off)",
     "Requested regular giving signup",
+    "Requested upgrade to existing donation",
+    "Made secondary/follow-up ask after decline",
+    "Handled objection or hesitation",
+    "Overcame objection successfully",
+    "Accepted decline gracefully",
+    "Offered alternative giving option",
     "Processed donation payment",
     "Attempted retention/save during cancellation",
     "Attempted supporter conversion",
@@ -66,7 +73,8 @@
     "Resolved supporter issue",
     "Escalated to supervisor/team",
     "Scheduled callback",
-    "Closed the enquiry clearly"
+    "Closed the enquiry clearly",
+    "Thanked supporter for their time"
   ],
   "performance_rubric": [
     "Clarity of speech",

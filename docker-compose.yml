@@ -1,28 +1,92 @@
 version: '3.8'
 
+# ==============================================================================
+# Angel Intelligence - Docker Compose Configuration
+# ==============================================================================
+# For local development and single-node deployment
+# For Kubernetes/Jetson cluster, use k8s/ manifests
+
 services:
-  ai-worker:
+  # ----------------------------------------------------------------------------
+  # API Gateway
+  # ----------------------------------------------------------------------------
+  api:
     build: .
+    container_name: angel-intelligence-api
+    ports:
+      - "8000:8000"
     environment:
+      - ANGEL_ENV=development
+      - WORKER_ID=api-gateway
+      - API_AUTH_TOKEN=${API_AUTH_TOKEN}
+      
       # Database
-      - AI_DB_HOST=your-db-host
-      - AI_DB_PORT=3306
-      - AI_DB_DATABASE=ai_calls
-      - AI_DB_USERNAME=root
-      - AI_DB_PASSWORD=your-password
+      - AI_DB_HOST=${AI_DB_HOST:-localhost}
+      - AI_DB_PORT=${AI_DB_PORT:-3306}
+      - AI_DB_DATABASE=${AI_DB_DATABASE:-ai}
+      - AI_DB_USERNAME=${AI_DB_USERNAME:-root}
+      - AI_DB_PASSWORD=${AI_DB_PASSWORD}
       
       # R2 Storage
-      - R2_ENDPOINT=https://your-account.r2.cloudflarestorage.com
-      - R2_ACCESS_KEY_ID=your-key
-      - R2_SECRET_ACCESS_KEY=your-secret
-      - R2_BUCKET=call-recordings
+      - R2_ENDPOINT=${R2_ENDPOINT}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+      - R2_BUCKET=${R2_BUCKET:-call-recordings}
       
-      # Worker settings
-      - POLL_INTERVAL=30
+    volumes:
+      - ./models:/app/models:ro
+    restart: unless-stopped
+    command: uvicorn src.api:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ----------------------------------------------------------------------------
+  # Worker (Processing)
+  # ----------------------------------------------------------------------------
+  worker:
+    build: .
+    container_name: angel-intelligence-worker
+    environment:
+      - ANGEL_ENV=development
+      - WORKER_ID=worker-1
+      
+      # Database
+      - AI_DB_HOST=${AI_DB_HOST:-localhost}
+      - AI_DB_PORT=${AI_DB_PORT:-3306}
+      - AI_DB_DATABASE=${AI_DB_DATABASE:-ai}
+      - AI_DB_USERNAME=${AI_DB_USERNAME:-root}
+      - AI_DB_PASSWORD=${AI_DB_PASSWORD}
+      
+      # R2 Storage
+      - R2_ENDPOINT=${R2_ENDPOINT}
+      - R2_ACCESS_KEY_ID=${R2_ACCESS_KEY_ID}
+      - R2_SECRET_ACCESS_KEY=${R2_SECRET_ACCESS_KEY}
+      - R2_BUCKET=${R2_BUCKET:-call-recordings}
+      
+      # PBX Sources
+      - PBX_LIVE_URL=${PBX_LIVE_URL:-https://pbx.angelfs.co.uk/callrec/}
+      - PBX_ARCHIVE_URL=${PBX_ARCHIVE_URL:-https://afs-pbx-callarchive.angelfs.co.uk/}
+      
+      # Processing
+      - POLL_INTERVAL=${POLL_INTERVAL:-30}
+      - ANALYSIS_MODE=${ANALYSIS_MODE:-audio}
+      - WHISPER_MODEL=${WHISPER_MODEL:-medium}
+      - ENABLE_PII_REDACTION=true
+      - TRANSCRIPT_SEGMENTATION=word
+      
+      # Models
+      - ANALYSIS_MODEL=${ANALYSIS_MODEL:-Qwen/Qwen2.5-Omni-7B}
+      - USE_MOCK_MODELS=${USE_MOCK_MODELS:-false}
+      
+      # GPU
       - CUDA_VISIBLE_DEVICES=0
       
     volumes:
-      - ./models:/root/.cache  # Cache models
+      - ./models:/app/models
+      - model-cache:/root/.cache
     deploy:
       resources:
         reservations:
@@ -31,4 +95,10 @@ services:
               count: 1
               capabilities: [gpu]
     restart: unless-stopped
-    command: python worker.py
+    command: python -m src.worker.worker
+    depends_on:
+      - api
+
+volumes:
+  model-cache:
+    driver: local

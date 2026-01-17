@@ -1,12 +1,13 @@
 #!/bin/bash
-# Build and deploy AI worker to K3s cluster
+# Build and deploy Angel Intelligence to K3s cluster
 
 set -e
 
 # Configuration
 REGISTRY="${K3S_REGISTRY:-localhost:5000}"
-IMAGE_NAME="ai-worker"
+IMAGE_NAME="angel-intelligence"
 VERSION="${VERSION:-latest}"
+COMPONENT="${COMPONENT:-all}"  # 'api', 'worker', or 'all'
 FULL_IMAGE="${REGISTRY}/${IMAGE_NAME}:${VERSION}"
 
 echo "🔨 Building Docker image..."
@@ -18,16 +19,24 @@ docker tag ${IMAGE_NAME}:${VERSION} ${FULL_IMAGE}
 echo "📤 Pushing to registry at ${REGISTRY}..."
 docker push ${FULL_IMAGE}
 
-echo "📝 Updating deployment image..."
-kubectl set image deployment/ai-worker ai-worker=${FULL_IMAGE}
+if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "api" ]; then
+    echo "📝 Updating API deployment..."
+    kubectl set image deployment/angel-intelligence-api api=${FULL_IMAGE}
+    kubectl rollout status deployment/angel-intelligence-api
+fi
 
-echo "⏳ Waiting for rollout to complete..."
-kubectl rollout status deployment/ai-worker
+if [ "$COMPONENT" = "all" ] || [ "$COMPONENT" = "worker" ]; then
+    echo "📝 Updating Worker deployment..."
+    kubectl set image deployment/angel-intelligence-worker worker=${FULL_IMAGE}
+    kubectl rollout status deployment/angel-intelligence-worker
+fi
 
 echo "✅ Deployment complete!"
 echo ""
 echo "📊 Pod status:"
-kubectl get pods -l app=ai-worker
+kubectl get pods -l app=angel-intelligence
 
 echo ""
-echo "💡 View logs with: kubectl logs -f deployment/ai-worker"
+echo "💡 View logs with:"
+echo "   API:    kubectl logs -f deployment/angel-intelligence-api"
+echo "   Worker: kubectl logs -f deployment/angel-intelligence-worker"

@@ -1,11 +1,12 @@
-# Build and deploy AI worker to K3s cluster (PowerShell)
+# Build and deploy Angel Intelligence to K3s cluster (PowerShell)
 
 param(
     [string]$Registry = $env:K3S_REGISTRY ?? "localhost:5000",
-    [string]$Version = "latest"
+    [string]$Version = "latest",
+    [string]$Component = "all"  # 'api', 'worker', or 'all'
 )
 
-$ImageName = "ai-worker"
+$ImageName = "angel-intelligence"
 $FullImage = "${Registry}/${ImageName}:${Version}"
 
 Write-Host "🔨 Building Docker image..." -ForegroundColor Cyan
@@ -27,16 +28,24 @@ if ($LASTEXITCODE -ne 0) {
     exit 1
 }
 
-Write-Host "📝 Updating deployment image..." -ForegroundColor Cyan
-kubectl set image deployment/ai-worker "ai-worker=$FullImage"
+if ($Component -eq "all" -or $Component -eq "api") {
+    Write-Host "📝 Updating API deployment..." -ForegroundColor Cyan
+    kubectl set image deployment/angel-intelligence-api "api=$FullImage"
+    kubectl rollout status deployment/angel-intelligence-api
+}
 
-Write-Host "⏳ Waiting for rollout to complete..." -ForegroundColor Cyan
-kubectl rollout status deployment/ai-worker
+if ($Component -eq "all" -or $Component -eq "worker") {
+    Write-Host "📝 Updating Worker deployment..." -ForegroundColor Cyan
+    kubectl set image deployment/angel-intelligence-worker "worker=$FullImage"
+    kubectl rollout status deployment/angel-intelligence-worker
+}
 
 Write-Host "✅ Deployment complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "📊 Pod status:" -ForegroundColor Cyan
-kubectl get pods -l app=ai-worker
+kubectl get pods -l app=angel-intelligence
 
 Write-Host ""
-Write-Host "💡 View logs with: kubectl logs -f deployment/ai-worker" -ForegroundColor Yellow
+Write-Host "💡 View logs with:" -ForegroundColor Yellow
+Write-Host "   API:    kubectl logs -f deployment/angel-intelligence-api"
+Write-Host "   Worker: kubectl logs -f deployment/angel-intelligence-worker"

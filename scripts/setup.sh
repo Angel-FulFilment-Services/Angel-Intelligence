@@ -1,10 +1,10 @@
 #!/bin/bash
-# Initial setup script for K3s cluster
+# Initial setup script for Angel Intelligence K3s cluster
 
 set -e
 
-echo "🚀 K3s AI Worker Initial Setup"
-echo "================================"
+echo "🚀 Angel Intelligence - Kubernetes Setup"
+echo "========================================="
 echo ""
 
 # Check if kubectl is available
@@ -28,7 +28,7 @@ echo "📦 Creating namespace (if needed)..."
 kubectl create namespace default --dry-run=client -o yaml | kubectl apply -f -
 
 # Create secrets if they don't exist
-if ! kubectl get secret ai-worker-secrets &> /dev/null; then
+if ! kubectl get secret angel-intelligence-secrets &> /dev/null; then
     echo "🔐 Creating secrets..."
     if [ ! -f "k8s/secret.yaml" ]; then
         echo "⚠️  k8s/secret.yaml not found!"
@@ -52,16 +52,17 @@ kubectl apply -f k8s/deployment.yaml
 
 echo ""
 echo "⏳ Waiting for pods to be ready..."
-kubectl wait --for=condition=ready pod -l app=ai-worker --timeout=300s || true
+kubectl wait --for=condition=ready pod -l app=angel-intelligence --timeout=300s || true
 
 echo ""
 echo "✅ Setup complete!"
 echo ""
 echo "📊 Current status:"
-kubectl get pods -l app=ai-worker
+kubectl get pods -l app=angel-intelligence
 echo ""
 echo "💡 Useful commands:"
-echo "   View logs:          kubectl logs -f deployment/ai-worker"
-echo "   Scale workers:      kubectl scale deployment ai-worker --replicas=N"
-echo "   Update workers:     ./scripts/deploy.sh"
+echo "   View API logs:      kubectl logs -f deployment/angel-intelligence-api"
+echo "   View worker logs:   kubectl logs -f deployment/angel-intelligence-worker"
+echo "   Scale workers:      kubectl scale deployment angel-intelligence-worker --replicas=N"
+echo "   Update deployment:  ./scripts/deploy.sh"
 echo "   Delete everything:  kubectl delete -f k8s/"

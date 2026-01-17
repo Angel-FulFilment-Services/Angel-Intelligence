@@ -1,0 +1,64 @@
+"""
+Angel Intelligence - FastAPI Application
+
+Main API application with authentication and all routes.
+"""
+
+import logging
+from contextlib import asynccontextmanager
+
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+
+from src.config import get_settings
+from src.api.routes import router
+
+logger = logging.getLogger(__name__)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Application lifespan handler."""
+    # Startup
+    settings = get_settings()
+    logger.info(f"Starting Angel Intelligence API in {settings.angel_env} mode")
+    
+    yield
+    
+    # Shutdown
+    logger.info("Shutting down Angel Intelligence API")
+
+
+def create_app() -> FastAPI:
+    """Create and configure the FastAPI application."""
+    settings = get_settings()
+    
+    app = FastAPI(
+        title="Angel Intelligence",
+        description="AI-powered call transcription and analysis service for Angel Fulfilment Services",
+        version="1.0.0",
+        docs_url="/docs" if settings.is_development else None,
+        redoc_url="/redoc" if settings.is_development else None,
+        lifespan=lifespan,
+    )
+    
+    # CORS middleware
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=["*"] if settings.is_development else ["https://pulse.angelfs.co.uk"],
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+    
+    # Include API routes
+    app.include_router(router, prefix="/api/v1")
+    
+    # Also include at root for backwards compatibility
+    app.include_router(router)
+    
+    return app
+
+
+# Create default app instance
+app = create_app()

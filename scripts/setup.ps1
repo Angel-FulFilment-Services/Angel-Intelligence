@@ -1,9 +1,9 @@
-# Initial setup script for K3s cluster (PowerShell)
+# Initial setup script for Angel Intelligence K3s cluster (PowerShell)
 
 $ErrorActionPreference = "Stop"
 
-Write-Host "🚀 K3s AI Worker Initial Setup" -ForegroundColor Cyan
-Write-Host "================================" -ForegroundColor Cyan
+Write-Host "🚀 Angel Intelligence - Kubernetes Setup" -ForegroundColor Cyan
+Write-Host "=========================================" -ForegroundColor Cyan
 Write-Host ""
 
 # Check if kubectl is available
@@ -30,7 +30,7 @@ Write-Host ""
 # Create secrets if they don't exist
 Write-Host "🔐 Checking secrets..." -ForegroundColor Cyan
 try {
-    kubectl get secret ai-worker-secrets | Out-Null
+    kubectl get secret angel-intelligence-secrets | Out-Null
     Write-Host "✅ Secrets already exist" -ForegroundColor Green
 } catch {
     if (!(Test-Path "k8s\secret.yaml")) {
@@ -54,17 +54,18 @@ kubectl apply -f k8s\deployment.yaml
 
 Write-Host ""
 Write-Host "⏳ Waiting for pods to be ready..." -ForegroundColor Cyan
-kubectl wait --for=condition=ready pod -l app=ai-worker --timeout=300s
+kubectl wait --for=condition=ready pod -l app=angel-intelligence --timeout=300s
 
 Write-Host ""
 Write-Host "✅ Setup complete!" -ForegroundColor Green
 Write-Host ""
 Write-Host "📊 Current status:" -ForegroundColor Cyan
-kubectl get pods -l app=ai-worker
+kubectl get pods -l app=angel-intelligence
 
 Write-Host ""
 Write-Host "💡 Useful commands:" -ForegroundColor Yellow
-Write-Host "   View logs:          kubectl logs -f deployment/ai-worker"
-Write-Host "   Scale workers:      kubectl scale deployment ai-worker --replicas=N"
-Write-Host "   Update workers:     .\scripts\deploy.ps1"
+Write-Host "   View API logs:      kubectl logs -f deployment/angel-intelligence-api"
+Write-Host "   View worker logs:   kubectl logs -f deployment/angel-intelligence-worker"
+Write-Host "   Scale workers:      kubectl scale deployment angel-intelligence-worker --replicas=N"
+Write-Host "   Update deployment:  .\scripts\deploy.ps1"
 Write-Host "   Delete everything:  kubectl delete -f k8s\"
