@@ -343,6 +343,34 @@ R2_BUCKET=angel-call-recordings
 
 ## Worker Settings
 
+### WORKER_MODE
+
+**Required**: No  
+**Type**: String  
+**Default**: batch  
+**Values**: `batch`, `interactive`, `both`
+
+Determines what workload this worker handles:
+
+- **`batch`**: Call processing (transcription, analysis) - long-running, GPU-heavy
+- **`interactive`**: Real-time AI requests (chat, summaries) - fast response, user-facing
+- **`both`**: All workloads (for development or single-node setups)
+
+**Production Setup:**
+- Deploy 3+ workers with `WORKER_MODE=batch` for call processing
+- Deploy 1+ workers with `WORKER_MODE=interactive` for chat/summaries
+- Adjust ratio based on workload
+
+```env
+# Batch worker
+WORKER_MODE=batch
+
+# Interactive worker
+WORKER_MODE=interactive
+```
+
+---
+
 ### POLL_INTERVAL_SECONDS
 
 **Required**: No  

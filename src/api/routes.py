@@ -158,21 +158,26 @@ async def health():
     except Exception:
         pass
     
-    # Check which models are loaded
+    # Check which models are configured
+    # Models will auto-download from HuggingFace on first use
     models_loaded = {
         "analysis": {
             "version": os.getenv("ANALYSIS_MODEL_VERSION", "v1.0.0"),
-            "loaded": os.path.exists(settings.analysis_model_path) if settings.analysis_model_path else False,
-            "path": settings.analysis_model_path,
+            "source": "local" if settings.analysis_model_path else "huggingface",
+            "path_or_id": settings.analysis_model_path or settings.analysis_model,
+            "will_auto_download": not settings.analysis_model_path,
         },
         "chat": {
             "version": "base",
             "loaded": interactive_status.get("model_loaded", False),
-            "path": settings.chat_model_path,
+            "source": "local" if settings.chat_model_path else "huggingface",
+            "path_or_id": settings.chat_model_path or settings.chat_model,
+            "will_auto_download": not settings.chat_model_path,
         },
         "whisper": {
             "version": settings.whisper_model or "medium",
-            "loaded": True,  # WhisperX loads on demand
+            "source": "huggingface",
+            "will_auto_download": True,
         },
         "interactive": interactive_status,
     }
@@ -390,17 +395,49 @@ async def chat(request: ChatRequest):
     Can reference a specific recording or ask general questions.
     Uses the interactive service on dedicated node(s).
     """
+    import time
     import uuid
     from src.services import get_interactive_service
+    from src.database import ChatConversation, ChatMessage
+    
+    request_start = time.time()
+    logger.info(f"[TIMING] Chat request received at {request_start}")
+    
+    db = get_db_connection()
     
     # Generate or use existing conversation ID
-    conversation_id = request.conversation_id or str(uuid.uuid4())
+    if request.conversation_id:
+        conversation_id = request.conversation_id
+        # Verify conversation exists
+        conversation = ChatConversation.get_by_id(conversation_id)
+        if not conversation:
+            raise HTTPException(status_code=404, detail="Conversation not found")
+    else:
+        # Create new conversation
+        conversation = ChatConversation(
+            user_id=0,  # TODO: Get from auth
+            feature="call_quality",
+            title=request.message[:100] if len(request.message) > 100 else request.message,
+        )
+        conversation_id = conversation.save()
+    
+    conv_time = time.time()
+    logger.info(f"[TIMING] Conversation setup took {conv_time - request_start:.2f}s")
+    
+    # Save user message immediately
+    user_message = ChatMessage(
+        ai_chat_conversation_id=conversation_id,
+        role="user",
+        content=request.message,
+    )
+    user_message.save()
+    
+    save_time = time.time()
+    logger.info(f"[TIMING] Message save took {save_time - conv_time:.2f}s")
     
     # Build context if recording specified
     context = None
     if request.recording_id:
-        db = get_db_connection()
-        
         # Get transcription
         trans = db.fetch_one(
             "SELECT full_transcript FROM ai_call_transcriptions WHERE ai_call_recording_id = %s",
@@ -423,16 +460,34 @@ async def chat(request: ChatRequest):
         if context_parts:
             context = "\n".join(context_parts)
     
+    context_time = time.time()
+    logger.info(f"[TIMING] Context build took {context_time - save_time:.2f}s")
+    
     # Use interactive service for AI response
+    logger.info(f"[TIMING] Starting AI generation...")
     service = get_interactive_service()
     result = service.chat(
         message=request.message,
         context=context,
     )
     
+    ai_time = time.time()
+    logger.info(f"[TIMING] AI generation took {ai_time - context_time:.2f}s")
+    
+    # Save assistant response
+    assistant_message = ChatMessage(
+        ai_chat_conversation_id=conversation_id,
+        role="assistant",
+        content=result["response"],
+    )
+    assistant_message.save()
+    
+    total_time = time.time()
+    logger.info(f"[TIMING] Total request took {total_time - request_start:.2f}s")
+    
     return ChatResponse(
         response=result["response"],
-        conversation_id=conversation_id,
+        conversation_id=str(conversation_id),
     )
 
 
@@ -596,14 +651,14 @@ async def process_call(request: ProcessRequest):
 
 
 # =============================================================================
-# Monthly Summary Generation
+# Summary Generation
 # =============================================================================
 
 class SummaryGenerateRequest(BaseModel):
-    """Request to generate a monthly summary."""
+    """Request to generate a summary for a date range."""
     feature: str = "call_quality"
-    month: int
-    year: int
+    start_date: str  # YYYY-MM-DD
+    end_date: str    # YYYY-MM-DD
     client_ref: Optional[str] = None
     campaign: Optional[str] = None
     agent_id: Optional[int] = None
@@ -622,14 +677,14 @@ class SummaryGenerateResponse(BaseModel):
     response_model=SummaryGenerateResponse,
     dependencies=[Depends(verify_token)]
 )
-async def generate_monthly_summary(request: SummaryGenerateRequest):
+async def generate_summary(request: SummaryGenerateRequest):
     """
-    Generate a monthly summary using the interactive service.
+    Generate a summary using the interactive service.
     
-    Aggregates call data for the specified month and generates
+    Aggregates call data for the specified date range and generates
     AI-powered insights and recommendations.
     """
-    from src.database import MonthlySummary
+    from src.database import Summary
     from src.services import get_interactive_service
     
     db = get_db_connection()
@@ -643,11 +698,11 @@ async def generate_monthly_summary(request: SummaryGenerateRequest):
             SUM(r.duration_seconds) as total_duration
         FROM ai_call_analysis a
         JOIN ai_call_recordings r ON a.ai_call_recording_id = r.id
-        WHERE MONTH(r.call_date) = %s AND YEAR(r.call_date) = %s
+        WHERE r.call_date >= %s AND r.call_date <= %s
     """
-    params = [request.month, request.year]
+    params = [request.start_date, request.end_date]
     
-    filters = {"month": request.month, "year": request.year}
+    filters = {"start_date": request.start_date, "end_date": request.end_date}
     
     if request.client_ref:
         query += " AND r.client_ref = %s"
@@ -702,17 +757,17 @@ async def generate_monthly_summary(request: SummaryGenerateRequest):
     }
     
     # Save to database
-    monthly_summary = MonthlySummary(
+    summary = Summary(
         feature=request.feature,
-        month=request.month,
-        year=request.year,
+        start_date=request.start_date,
+        end_date=request.end_date,
         client_ref=request.client_ref,
         campaign=request.campaign,
         agent_id=request.agent_id,
         summary_data=summary_data,
         metrics=metrics,
     )
-    summary_id = monthly_summary.save()
+    summary_id = summary.save()
     
     return SummaryGenerateResponse(
         success=True,
@@ -1019,14 +1074,22 @@ async def enhanced_chat(request: EnhancedChatRequest):
     context_calls = 0
     
     if request.filters:
-        # Count calls matching filters
-        query = "SELECT COUNT(*) as cnt, AVG(a.quality_score) as avg_quality, AVG(a.sentiment_score) as avg_sentiment FROM ai_call_recordings r LEFT JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id WHERE 1=1"
+        # Get aggregated metrics and recent calls
+        query = """
+            SELECT 
+                COUNT(*) as cnt, 
+                AVG(a.quality_score) as avg_quality, 
+                AVG(a.sentiment_score) as avg_sentiment,
+                SUM(r.duration_seconds) as total_duration
+            FROM ai_call_recordings r 
+            LEFT JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id 
+            WHERE 1=1
+        """
         params = []
         
         if request.filters.get("client_ref"):
             query += " AND r.client_ref = %s"
             params.append(request.filters["client_ref"])
-            context_parts.append(f"Client: {request.filters['client_ref']}")
         
         if request.filters.get("start_date"):
             query += " AND r.call_date >= %s"
@@ -1036,17 +1099,58 @@ async def enhanced_chat(request: EnhancedChatRequest):
             query += " AND r.call_date <= %s"
             params.append(request.filters["end_date"])
         
-        if request.filters.get("start_date") or request.filters.get("end_date"):
-            context_parts.append(f"Period: {request.filters.get('start_date', 'start')} to {request.filters.get('end_date', 'now')}")
-        
         result = db.fetch_one(query, tuple(params))
         if result:
             context_calls = result["cnt"] or 0
             avg_quality = result["avg_quality"] or 0
             avg_sentiment = result["avg_sentiment"] or 0
-            context_parts.append(f"Total calls: {context_calls}")
-            context_parts.append(f"Average quality: {avg_quality:.1f}%")
-            context_parts.append(f"Average sentiment: {avg_sentiment:.1f}")
+            total_duration = result["total_duration"] or 0
+            
+            context_parts.append(f"**Available Data:** {context_calls} calls analysed")
+            if request.filters.get("start_date") or request.filters.get("end_date"):
+                # Convert dates to UK format (DD/MM/YYYY)
+                from datetime import datetime
+                start_uk = datetime.strptime(request.filters.get("start_date", ""), "%Y-%m-%d").strftime("%d/%m/%Y") if request.filters.get("start_date") else "start"
+                end_uk = datetime.strptime(request.filters.get("end_date", ""), "%Y-%m-%d").strftime("%d/%m/%Y") if request.filters.get("end_date") else "now"
+                context_parts.append(f"Period: {start_uk} to {end_uk}")
+            if request.filters.get("client_ref"):
+                context_parts.append(f"Client: {request.filters['client_ref']}")
+            context_parts.append(f"Average Quality Score: {avg_quality:.1f}%")
+            context_parts.append(f"Average Sentiment: {avg_sentiment:.1f}/10")
+            context_parts.append(f"Total Duration: {total_duration // 60:.0f} minutes")
+            
+            # Get topic breakdown if available
+            topic_query = """
+                SELECT key_topics
+                FROM ai_call_analysis a
+                JOIN ai_call_recordings r ON a.ai_call_recording_id = r.id
+                WHERE 1=1 AND a.key_topics IS NOT NULL
+            """
+            if request.filters.get("start_date"):
+                topic_query += " AND r.call_date >= %s"
+            if request.filters.get("end_date"):
+                topic_query += " AND r.call_date <= %s"
+            
+            topic_query += " LIMIT 50"
+            
+            topics_results = db.fetch_all(topic_query, tuple([f for f in [request.filters.get("start_date"), request.filters.get("end_date")] if f]))
+            if topics_results:
+                all_topics = {}
+                for row in topics_results:
+                    if row.get("key_topics"):
+                        import json
+                        try:
+                            topics = json.loads(row["key_topics"]) if isinstance(row["key_topics"], str) else row["key_topics"]
+                            if isinstance(topics, list):
+                                for topic in topics:
+                                    topic_name = topic.get("name") if isinstance(topic, dict) else str(topic)
+                                    all_topics[topic_name] = all_topics.get(topic_name, 0) + 1
+                        except:
+                            pass
+                
+                if all_topics:
+                    top_topics = sorted(all_topics.items(), key=lambda x: x[1], reverse=True)[:5]
+                    context_parts.append(f"\n**Common Topics:** {', '.join([f'{t[0]} ({t[1]} calls)' for t in top_topics])}")
     
     # Use interactive service for AI response
     service = get_interactive_service()
@@ -1077,5 +1181,6 @@ async def enhanced_chat(request: EnhancedChatRequest):
             "tokens_used": result.get("tokens_used", 0),
             "context_calls_analysed": context_calls,
             "processing_time": result.get("processing_time", 0),
+            "format": "markdown",
         }
     )

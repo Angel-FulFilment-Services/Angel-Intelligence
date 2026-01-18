@@ -87,6 +87,9 @@ class Settings(BaseSettings):
     # Worker mode: 'batch' for call processing, 'interactive' for chat/summaries, 'both' for all
     worker_mode: str = Field(default="batch", description="Worker mode: 'batch', 'interactive', or 'both'")
     
+    # Preload models on startup (eliminates first-request delay)
+    preload_chat_model: bool = Field(default=True, description="Preload chat model on API startup")
+    
     # Transcription settings
     transcript_segmentation: str = Field(default="word", description="Segmentation: 'word' or 'sentence'")
     

@@ -13,6 +13,42 @@ Angel Intelligence is an AI-powered call analysis system designed to:
 
 ---
 
+## Worker Modes
+
+Angel Intelligence supports different worker modes to separate batch and interactive workloads:
+
+| Mode | Purpose | Workload |
+|------|---------|----------|
+| `batch` | Call processing | Transcription, PII detection, analysis (long-running, GPU-heavy) |
+| `interactive` | Real-time requests | Chat, summary generation (fast response, user-facing) |
+| `both` | All workloads | Development or single-node deployments |
+
+### Recommended Production Setup
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                        API Gateway                               │
+│                    (Handles HTTP routing)                        │
+└───────────────────────────┬─────────────────────────────────────┘
+                            │
+        ┌───────────────────┴───────────────────┐
+        ▼                                       ▼
+   ┌─────────────────────┐              ┌─────────────────────┐
+   │   Batch Workers     │              │  Interactive Node   │
+   │   (Jetsons 1-N)     │              │    (Jetson N+1)     │
+   │   WORKER_MODE=batch │              │ WORKER_MODE=interactive│
+   │                     │              │                     │
+   │ • Transcription     │              │ • /chat             │
+   │ • Analysis          │              │ • /summary/generate │
+   │ • PII Detection     │              │ • Future AI APIs    │
+   │ • ~300 calls/day ea │              │ • Fast response     │
+   └─────────────────────┘              └─────────────────────┘
+```
+
+Adjust the ratio of batch:interactive nodes based on your workload. Start with N-1 batch workers and 1 interactive node.
+
+---
+
 ## System Components
 
 ```
@@ -422,11 +458,19 @@ else:
 
 ### Planned Features
 
-1. **Voice Fingerprinting** - Automatic agent identification
-2. **Real-time Processing** - Streaming analysis
-3. **Custom Model Training** - Fine-tuning pipeline
-4. **Webhook Notifications** - Status callbacks
-5. **Multi-language Support** - Beyond English
+1. **Real-time Processing** - Streaming analysis during live calls
+2. **Webhook Notifications** - Status callbacks to Pulse
+3. **Multi-language Support** - Extended beyond English
+4. **Advanced Analytics** - Trend analysis, benchmarking
+5. **Agent Performance Dashboard** - Individual metrics tracking
+
+### Recently Implemented
+
+1. ✅ **Voice Fingerprinting** - Automatic agent identification using voice embeddings
+2. ✅ **Custom Model Training** - Fine-tuning pipeline with annotation export/import
+3. ✅ **Worker Mode Separation** - Batch vs interactive workload isolation
+4. ✅ **Interactive AI Service** - Dedicated service for chat and summaries
+5. ✅ **Client Configuration** - Per-client topics, actions, and rubric overrides
 
 ### Technical Debt
 

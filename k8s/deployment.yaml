@@ -273,6 +273,158 @@ spec:
       restartPolicy: Always
 
 ---
+# =============================================================================
+# Interactive Worker Deployment
+# Handles real-time AI requests: chat, summaries, future AI features
+# Scale this based on interactive request volume
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: angel-intelligence-interactive
+  namespace: default
+  labels:
+    app: angel-intelligence
+    component: interactive
+spec:
+  # Start with 1 interactive node, scale as needed
+  replicas: 1
+  selector:
+    matchLabels:
+      app: angel-intelligence
+      component: interactive
+  template:
+    metadata:
+      labels:
+        app: angel-intelligence
+        component: interactive
+    spec:
+      containers:
+      - name: interactive
+        image: localhost:5000/angel-intelligence:latest
+        imagePullPolicy: Always
+        
+        # Run the API server which handles interactive requests
+        command: ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
+        
+        env:
+        - name: ANGEL_ENV
+          value: "production"
+        - name: WORKER_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: WORKER_MODE
+          value: "interactive"
+        
+        # Database
+        - name: AI_DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-host
+        - name: AI_DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-port
+        - name: AI_DB_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-database
+        - name: AI_DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-username
+        - name: AI_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-password
+        
+        # Chat model for interactive requests
+        - name: CHAT_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model
+        
+        # GPU
+        - name: CUDA_VISIBLE_DEVICES
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: cuda-visible-devices
+        
+        ports:
+        - containerPort: 8000
+          name: http
+        
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+          requests:
+            memory: "4Gi"
+            cpu: "2"
+        
+        volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+        - name: model-cache
+          mountPath: /root/.cache
+        
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 60
+          periodSeconds: 30
+        
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+      
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: angel-intelligence-models
+      - name: model-cache
+        hostPath:
+          path: /mnt/model-cache
+          type: DirectoryOrCreate
+      
+      # Schedule on GPU nodes
+      nodeSelector:
+        nvidia.com/gpu: "true"
+      
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: angel-intelligence-interactive
+  namespace: default
+  labels:
+    app: angel-intelligence
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: angel-intelligence
+    component: interactive
+
+---
 apiVersion: v1
 kind: Service
 metadata:

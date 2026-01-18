@@ -23,6 +23,17 @@ async def lifespan(app: FastAPI):
     settings = get_settings()
     logger.info(f"Starting Angel Intelligence API in {settings.angel_env} mode")
     
+    # Preload chat model if enabled
+    if settings.preload_chat_model and settings.worker_mode in ["interactive", "both"]:
+        logger.info("Preloading chat model to eliminate first-request delay...")
+        try:
+            from src.services import get_interactive_service
+            service = get_interactive_service()
+            service._ensure_model_loaded()
+            logger.info("Chat model preloaded successfully")
+        except Exception as e:
+            logger.warning(f"Failed to preload chat model: {e}")
+    
     yield
     
     # Shutdown

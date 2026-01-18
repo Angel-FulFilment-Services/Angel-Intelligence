@@ -123,7 +123,7 @@ class InteractiveService:
         message: str,
         context: Optional[str] = None,
         conversation_history: Optional[List[Dict[str, str]]] = None,
-        max_tokens: int = 1024,
+        max_tokens: int = 512,  # Reduced default for faster responses
     ) -> Dict[str, Any]:
         """
         Generate a chat response.
@@ -132,7 +132,7 @@ class InteractiveService:
             message: User's message
             context: Optional context (e.g., call transcript, analysis)
             conversation_history: Previous messages in conversation
-            max_tokens: Maximum response tokens
+            max_tokens: Maximum response tokens (default 512 for speed)
             
         Returns:
             Dict with response text and metadata
@@ -148,17 +148,34 @@ class InteractiveService:
         messages = []
         
         # System prompt
-        system_prompt = """You are an AI assistant for Angel Fulfilment Services, helping staff analyse charity call recordings and donor data.
+        system_prompt = """You are an AI assistant for Angel Fulfilment Services, helping staff analyse charity call recordings.
 
 Key guidelines:
 - Use British English spelling and conventions
-- Be concise but helpful
-- When discussing call data, reference specific metrics when available
-- Maintain a professional, supportive tone
-- If you don't have enough information, ask clarifying questions"""
+- **IMPORTANT**: Always format dates as DD/MM/YYYY (e.g., 17/01/2026, not 2026-01-17)
+- Format responses using Markdown for better readability when providing detailed information
+- **IMPORTANT**: Match your response length and detail to the user's question:
+  * Simple greetings ("hello", "hi", "thanks") → Brief, friendly response without data dumps
+  * General questions → Concise overview with key points
+  * Specific questions → Detailed analysis with relevant data
+- You have access to REAL DATA in the context - only reference it when the user asks for analysis or insights
+- If the user is just greeting you or chatting casually, don't overwhelm them with metrics
+- Keep responses concise unless specifically asked for detailed analysis
+- Be data-driven when appropriate, conversational when appropriate
+- Professional and supportive tone
+
+**CRITICAL - Stay On Topic:**
+- Your ONLY purpose is to help analyse charity call recordings and donor interactions
+- ONLY answer questions related to: call quality, transcripts, sentiment, agent performance, donor interactions, call metrics, trends, or related analysis
+- REFUSE politely if asked about: general knowledge, personal advice, coding help, unrelated topics, or anything outside call/donor analysis
+- If unsure whether a question is relevant, err on the side of keeping it focused on call analysis
+- Example refusal: "I'm specifically designed to help with call quality analysis and donor interactions insights. I can't assist with that topic, but I'd be happy to help you analyse call recordings or review performance metrics instead."
+
+**Relevant topics:** call transcripts, quality scores, sentiment analysis, agent performance, donor behaviour, compliance checks, call topics, Gift Aid explanations, objection handling, conversion rates, campaign effectiveness
+**Off-limits:** general chat, recipes, weather, news, personal advice, technical support for unrelated systems"""
         
         if context:
-            system_prompt += f"\n\nContext:\n{context}"
+            system_prompt += f"\n\n**Available Data Context (use only when relevant to user's question):**\n{context}"
         
         messages.append({"role": "system", "content": system_prompt})
         
@@ -182,9 +199,10 @@ Key guidelines:
                     inputs,
                     max_new_tokens=max_tokens,
                     do_sample=True,
-                    temperature=0.7,
-                    top_p=0.9,
+                    temperature=0.6,  # Reduced for faster, more focused responses
+                    top_p=0.85,        # Reduced for faster generation
                     pad_token_id=self._tokenizer.eos_token_id,
+                    repetition_penalty=1.1,  # Prevent repetition
                 )
             
             # Decode response (only new tokens)
@@ -246,12 +264,12 @@ Average Quality Score: {data.get('avg_quality_score', 0):.1f}%
 Average Sentiment Score: {data.get('avg_sentiment_score', 0):.1f}
 Total Call Duration: {data.get('total_duration_seconds', 0) // 60} minutes
 
-Provide:
-1. A brief executive summary (2-3 sentences)
-2. 3-5 key insights
-3. 2-3 actionable recommendations
+Provide in Markdown format:
+1. A brief executive summary (2-3 sentences with **bold** metrics)
+2. ### Key Insights - 3-5 bullet points with specific data
+3. ### Recommendations - 2-3 actionable bullet points
 
-Use British English. Be specific and data-driven."""
+Use British English. Be specific and data-driven. Format numbers clearly."""
 
         messages = [
             {"role": "system", "content": "You are an AI analyst generating call quality reports for a charity fundraising company."},
@@ -337,8 +355,29 @@ Use British English. Be specific and data-driven."""
     
     def _mock_chat(self, message: str, context: Optional[str]) -> Dict[str, Any]:
         """Generate mock chat response for testing."""
+        # Check if it's just a greeting
+        greeting_words = ["hello", "hi", "hey", "greetings", "good morning", "good afternoon"]
+        if any(word in message.lower() for word in greeting_words) and len(message.split()) <= 3:
+            return {
+                "response": "Hello! I'm here to help you analyse call recordings and data. What would you like to know?",
+                "tokens_used": 20,
+                "processing_time": 0.1,
+                "model": "mock",
+            }
+        
         return {
-            "response": f"Thank you for your question. Based on the call quality data, I can see that the team is performing well overall. The average quality score indicates good adherence to scripts and positive supporter interactions. Is there a specific aspect of the calls you'd like me to analyse further?",
+            "response": f"""Thank you for your question. Based on the call quality data:
+
+**Performance Overview:**
+- Average quality score indicates **good adherence** to scripts
+- Positive supporter interactions detected
+- Call handling time within expected ranges
+
+**Key Observations:**
+- Sentiment analysis shows consistently positive tone
+- Gift Aid explanations meeting compliance standards
+
+Is there a specific aspect of the calls you'd like me to analyse further?""",
             "tokens_used": 50,
             "processing_time": 0.1,
             "model": "mock",
@@ -355,17 +394,17 @@ Use British English. Be specific and data-driven."""
         avg_quality = data.get('avg_quality_score', 75)
         
         return {
-            "summary": f"In the reporting period, {call_count} calls were analysed with an average quality score of {avg_quality:.1f}%. Overall performance remains strong with positive sentiment detected in the majority of interactions.",
+            "summary": f"In the reporting period, **{call_count} calls** were analysed with an average quality score of **{avg_quality:.1f}%**. Overall performance remains strong with positive sentiment detected in the majority of interactions.",
             "key_insights": [
-                "Call quality remained consistent throughout the period",
-                "Positive sentiment detected in 78% of calls",
-                "Gift Aid explanation compliance improved by 12%",
-                "Average call duration optimised at 4.5 minutes",
+                "Call quality remained **consistent** throughout the period",
+                "Positive sentiment detected in **78%** of calls",
+                "Gift Aid explanation compliance improved by **12%**",
+                "Average call duration optimised at **4.5 minutes**",
             ],
             "recommendations": [
-                "Consider additional training on objection handling techniques",
-                "Update scripts based on high-performing call patterns",
-                "Implement peer review sessions for knowledge sharing",
+                "Consider additional training on **objection handling** techniques",
+                "Update scripts based on **high-performing call patterns**",
+                "Implement **peer review sessions** for knowledge sharing",
             ],
             "metrics": data,
             "processing_time": 0.1,

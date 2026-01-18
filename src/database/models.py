@@ -438,16 +438,16 @@ class CallAnnotation:
 
 
 @dataclass
-class MonthlySummary:
+class Summary:
     """
-    Model for ai_monthly_summaries table.
+    Model for ai_summaries table.
     
-    AI-generated monthly summaries for call quality and other features.
+    AI-generated summaries for call quality and other features over date ranges.
     """
     id: Optional[int] = None
     feature: str = "call_quality"
-    month: int = 1
-    year: int = 2026
+    start_date: Optional[str] = None  # YYYY-MM-DD
+    end_date: Optional[str] = None    # YYYY-MM-DD
     client_ref: Optional[str] = None
     campaign: Optional[str] = None
     agent_id: Optional[int] = None
@@ -458,7 +458,7 @@ class MonthlySummary:
     updated_at: Optional[datetime] = None
     
     def save(self) -> int:
-        """Save or update monthly summary."""
+        """Save or update summary."""
         db = get_db_connection()
         
         summary_json = json.dumps(self.summary_data)
@@ -466,8 +466,8 @@ class MonthlySummary:
         
         # Use INSERT ... ON DUPLICATE KEY UPDATE
         self.id = db.insert("""
-            INSERT INTO ai_monthly_summaries
-            (feature, month, year, client_ref, campaign, agent_id,
+            INSERT INTO ai_summaries
+            (feature, start_date, end_date, client_ref, campaign, agent_id,
              summary_data, metrics, generated_at, created_at, updated_at)
             VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), NOW())
             ON DUPLICATE KEY UPDATE
@@ -477,8 +477,8 @@ class MonthlySummary:
              updated_at = NOW()
         """, (
             self.feature,
-            self.month,
-            self.year,
+            self.start_date,
+            self.end_date,
             self.client_ref,
             self.campaign,
             self.agent_id,
@@ -491,20 +491,20 @@ class MonthlySummary:
     @staticmethod
     def get(
         feature: str,
-        month: int,
-        year: int,
+        start_date: str,
+        end_date: str,
         client_ref: Optional[str] = None,
         campaign: Optional[str] = None,
         agent_id: Optional[int] = None
-    ) -> Optional["MonthlySummary"]:
-        """Retrieve a monthly summary."""
+    ) -> Optional["Summary"]:
+        """Retrieve a summary for a date range."""
         db = get_db_connection()
         
         query = """
-            SELECT * FROM ai_monthly_summaries
-            WHERE feature = %s AND month = %s AND year = %s
+            SELECT * FROM ai_summaries
+            WHERE feature = %s AND start_date = %s AND end_date = %s
         """
-        params = [feature, month, year]
+        params = [feature, start_date, end_date]
         
         if client_ref:
             query += " AND client_ref = %s"
@@ -528,11 +528,11 @@ class MonthlySummary:
         if not row:
             return None
         
-        return MonthlySummary(
+        return Summary(
             id=row["id"],
             feature=row["feature"],
-            month=row["month"],
-            year=row["year"],
+            start_date=row["start_date"],
+            end_date=row["end_date"],
             client_ref=row.get("client_ref"),
             campaign=row.get("campaign"),
             agent_id=row.get("agent_id"),

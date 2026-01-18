@@ -1,0 +1,16 @@
+version: '3.3'
+
+services:
+  angel-intelligence:
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+    container_name: angel-intelligence
+    network_mode: host
+    env_file:
+      - .env
+    volumes:
+      - ./models:/workspace/models
+      - ~/.cache/huggingface:/root/.cache/huggingface
+      - ./call-recordings:/workspace/call-recordings
+    restart: unless-stopped

@@ -11,6 +11,7 @@ data:
   analysis-mode: "audio"
   whisper-model: "medium"
   analysis-model: "Qwen/Qwen2.5-Omni-7B"
+  chat-model: "Qwen/Qwen2.5-Omni-7B"
   transcript-segmentation: "word"
   enable-pii-redaction: "true"
   
