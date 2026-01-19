@@ -18,7 +18,7 @@ data:
   whisper-model-path: "/models/whisper"
   
   # Analysis Model (for batch call processing)
-  analysis-model: "Qwen/Qwen2.5-0.5B-Instruct"
+  analysis-model: "Qwen/Qwen2.5-Omni-7B"
   analysis-model-path: "/models/analysis"
   analysis-model-quantization: ""
   
