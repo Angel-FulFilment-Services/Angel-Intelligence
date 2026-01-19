@@ -1281,7 +1281,7 @@ async def internal_chat(request: InternalChatRequest):
     requests to interactive workers. It runs the AI inference directly
     without database operations.
     """
-    from src.services import get_interactive_service
+    from src.services.interactive import get_interactive_service
     
     settings = get_settings()
     
