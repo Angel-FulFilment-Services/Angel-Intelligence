@@ -414,6 +414,16 @@ spec:
             configMapKeyRef:
               name: angel-intelligence-config
               key: chat-model
+        - name: CHAT_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model-path
+        - name: CHAT_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model-quantization
         # Disable preloading - load on first request instead
         - name: PRELOAD_CHAT_MODEL
           value: "false"
