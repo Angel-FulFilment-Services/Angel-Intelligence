@@ -298,11 +298,11 @@ spec:
 
         resources:
           requests:
-            memory: "256Mi"
-            cpu: "250m"
-          limits:
-            memory: "512Mi"
+            memory: "1Gi"
             cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
 
         livenessProbe:
           httpGet:
@@ -410,6 +410,9 @@ spec:
             configMapKeyRef:
               name: angel-intelligence-config
               key: chat-model
+        # Disable preloading - load on first request instead
+        - name: PRELOAD_CHAT_MODEL
+          value: "false"
 
         # GPU
         - name: CUDA_VISIBLE_DEVICES
