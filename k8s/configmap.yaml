@@ -10,8 +10,11 @@ data:
   poll-interval: "30"
   analysis-mode: "audio"
   whisper-model: "medium"
+  whisper-model-path: "/models/whisper"
   analysis-model: "Qwen/Qwen2.5-Omni-7B"
+  analysis-model-path: "/models/analysis"
   chat-model: "Qwen/Qwen2.5-Omni-7B"
+  chat-model-path: "/models/chat"
   transcript-segmentation: "word"
   enable-pii-redaction: "true"
   

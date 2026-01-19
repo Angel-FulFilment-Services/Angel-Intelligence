@@ -54,6 +54,9 @@ huggingface-hub>=0.16.0,<0.20.0
 tokenizers>=0.13.0,<0.15.0
 safetensors>=0.3.0
 
+git+https://github.com/huggingface/transformers@v4.51.3-Qwen2.5-Omni-preview
+qwen-omni-utils[decord]
+
 # ------------------------------------------------------------------------------
 # PII Detection
 # ------------------------------------------------------------------------------

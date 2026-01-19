@@ -56,6 +56,9 @@ presidio-analyzer
 presidio-anonymizer
 spacy>=3.7,<3.9
 
+git+https://github.com/huggingface/transformers@v4.51.3-Qwen2.5-Omni-preview
+qwen-omni-utils[decord]
+
 # Download spaCy model after install:
 # python -m spacy download en_core_web_lg
 

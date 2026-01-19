@@ -19,6 +19,11 @@ spec:
         app: angel-intelligence
         component: batch-worker
     spec:
+      hostAliases:
+        - ip: "192.168.5.13"
+          hostnames:
+            - "afs-db02.angelfs.co.uk"
+
       # Distribute workers across different nodes
       affinity:
         podAntiAffinity:
@@ -32,14 +37,14 @@ spec:
                   values:
                   - angel-intelligence
               topologyKey: kubernetes.io/hostname
-      
+
       containers:
       - name: worker
-        image: 192.168.9.50:30500/angel-intelligence:latest
+        image: 192.168.9.50:30500/angel-intelligence:latest-arm64
         imagePullPolicy: IfNotPresent
-        
+
         command: ["python", "-m", "src.worker.worker"]
-        
+
         env:
         # Environment
         - name: ANGEL_ENV
@@ -51,7 +56,7 @@ spec:
         # Worker mode - batch for call processing
         - name: WORKER_MODE
           value: "batch"
-        
+
         # Database configuration
         - name: AI_DB_HOST
           valueFrom:
@@ -78,7 +83,7 @@ spec:
             secretKeyRef:
               name: angel-intelligence-secrets
               key: db-password
-        
+
         # R2 Storage configuration
         - name: R2_ENDPOINT
           valueFrom:
@@ -100,7 +105,7 @@ spec:
             secretKeyRef:
               name: angel-intelligence-secrets
               key: r2-bucket
-        
+
         # Processing settings from ConfigMap
         - name: POLL_INTERVAL
           valueFrom:
@@ -132,7 +137,7 @@ spec:
             configMapKeyRef:
               name: angel-intelligence-config
               key: enable-pii-redaction
-        
+
         # PBX Sources
         - name: PBX_LIVE_URL
           valueFrom:
@@ -144,14 +149,14 @@ spec:
             configMapKeyRef:
               name: angel-intelligence-config
               key: pbx-archive-url
-        
+
         # GPU
         - name: CUDA_VISIBLE_DEVICES
           valueFrom:
             configMapKeyRef:
               name: angel-intelligence-config
               key: cuda-visible-devices
-        
+
         resources:
           limits:
             nvidia.com/gpu: 1
@@ -159,14 +164,14 @@ spec:
           requests:
             memory: "1.5Gi"
             cpu: "1"
-        
+
         volumeMounts:
         - name: models
           mountPath: /models
           readOnly: true
         - name: model-cache
           mountPath: /root/.cache
-      
+
       volumes:
       - name: models
         persistentVolumeClaim:
@@ -175,11 +180,11 @@ spec:
         hostPath:
           path: /mnt/model-cache
           type: DirectoryOrCreate
-      
+
       # Only schedule on nodes with GPU
       nodeSelector:
         nvidia.com/gpu: "true"
-      
+
       restartPolicy: Always
 
 ---
@@ -203,17 +208,43 @@ spec:
         app: angel-intelligence
         component: api
     spec:
+      hostAliases:
+        - ip: "192.168.5.13"
+          hostnames:
+            - "afs-db02.angelfs.co.uk"
+
+      # Allow scheduling on master/control-plane nodes
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+
+      # Prefer scheduling on master node to free up GPU node for AI workloads
+      affinity:
+        nodeAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            preference:
+              matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - afs-kube01
+
       containers:
       - name: api
-        image: 192.168.9.50:30500/angel-intelligence:latest
+        image: 192.168.9.50:30500/angel-intelligence:latest-amd64
         imagePullPolicy: IfNotPresent
-        
-        command: ["python3.9", "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
-        
+
+        command: ["python3", "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
         ports:
         - containerPort: 8000
           name: http
-        
+
         env:
         - name: ANGEL_ENV
           value: "production"
@@ -247,7 +278,7 @@ spec:
             secretKeyRef:
               name: angel-intelligence-secrets
               key: db-password
-        
+
         resources:
           requests:
             memory: "256Mi"
@@ -255,21 +286,21 @@ spec:
           limits:
             memory: "512Mi"
             cpu: "500m"
-        
+
         livenessProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 10
           periodSeconds: 30
-        
+
         readinessProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 5
           periodSeconds: 10
-      
+
       restartPolicy: Always
 
 ---
@@ -299,14 +330,19 @@ spec:
         app: angel-intelligence
         component: interactive
     spec:
+      hostAliases:
+        - ip: "192.168.5.13"
+          hostnames:
+            - "afs-db02.angelfs.co.uk"
+
       containers:
       - name: interactive
-        image: 192.168.9.50:30500/angel-intelligence:latest
+        image: 192.168.9.50:30500/angel-intelligence:latest-arm64
         imagePullPolicy: IfNotPresent
-        
+
         # Run the API server which handles interactive requests
         command: ["python3.9", "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
-        
+
         env:
         - name: ANGEL_ENV
           value: "production"
@@ -316,7 +352,7 @@ spec:
               fieldPath: metadata.name
         - name: WORKER_MODE
           value: "interactive"
-        
+
         # Database
         - name: AI_DB_HOST
           valueFrom:
@@ -343,25 +379,25 @@ spec:
             secretKeyRef:
               name: angel-intelligence-secrets
               key: db-password
-        
+
         # Chat model for interactive requests
         - name: CHAT_MODEL
           valueFrom:
             configMapKeyRef:
               name: angel-intelligence-config
               key: chat-model
-        
+
         # GPU
         - name: CUDA_VISIBLE_DEVICES
           valueFrom:
             configMapKeyRef:
               name: angel-intelligence-config
               key: cuda-visible-devices
-        
+
         ports:
         - containerPort: 8000
           name: http
-        
+
         resources:
           limits:
             nvidia.com/gpu: 1
@@ -369,28 +405,28 @@ spec:
           requests:
             memory: "1.5Gi"
             cpu: "1"
-        
+
         volumeMounts:
         - name: models
           mountPath: /models
           readOnly: true
         - name: model-cache
           mountPath: /root/.cache
-        
+
         livenessProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 60
           periodSeconds: 30
-        
+
         readinessProbe:
           httpGet:
             path: /health
             port: 8000
           initialDelaySeconds: 30
           periodSeconds: 10
-      
+
       volumes:
       - name: models
         persistentVolumeClaim:
@@ -399,11 +435,11 @@ spec:
         hostPath:
           path: /mnt/model-cache
           type: DirectoryOrCreate
-      
+
       # Schedule on GPU nodes
       nodeSelector:
         nvidia.com/gpu: "true"
-      
+
       restartPolicy: Always
 
 ---

@@ -52,7 +52,6 @@ services:
     environment:
       - ANGEL_ENV=development
       - WORKER_ID=worker-1
-      
       # Database
       - AI_DB_HOST=${AI_DB_HOST:-localhost}
       - AI_DB_PORT=${AI_DB_PORT:-3306}
