@@ -367,6 +367,11 @@ spec:
         # Fix ARM64 OpenMP TLS issue
         - name: LD_PRELOAD
           value: "/usr/lib/aarch64-linux-gnu/libgomp.so.1"
+        # Use local models only - no HuggingFace downloads
+        - name: HF_HUB_OFFLINE
+          value: "1"
+        - name: TRANSFORMERS_OFFLINE
+          value: "1"
         - name: ANGEL_ENV
           value: "production"
         - name: WORKER_ID
