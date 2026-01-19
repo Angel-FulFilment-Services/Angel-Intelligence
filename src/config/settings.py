@@ -9,7 +9,7 @@ import os
 from functools import lru_cache
 from typing import Optional
 from pydantic_settings import BaseSettings
-from pydantic import Field
+from pydantic import Field, field_validator
 
 
 class Settings(BaseSettings):
@@ -34,6 +34,14 @@ class Settings(BaseSettings):
     ai_db_database: str = Field(default="ai", description="Database name")
     ai_db_username: str = Field(default="root", description="Database username")
     ai_db_password: str = Field(default="", description="Database password")
+    
+    @field_validator('ai_db_port', mode='before')
+    @classmethod
+    def parse_port(cls, v):
+        """Convert string port to integer."""
+        if isinstance(v, str):
+            return int(v)
+        return v
     
     # ==========================================================================
     # R2 STORAGE CONFIGURATION

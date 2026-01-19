@@ -7,9 +7,8 @@ metadata:
     app: angel-intelligence
     component: batch-worker
 spec:
-  # Scale batch workers based on call volume
-  # Adjust replicas as needed (more workers = more batch capacity)
-  replicas: 3
+  # Reduced replicas for Jetson resource constraints
+  replicas: 0
   selector:
     matchLabels:
       app: angel-intelligence
@@ -36,8 +35,8 @@ spec:
       
       containers:
       - name: worker
-        image: angel-intelligence:jetson-latest
-        imagePullPolicy: Never
+        image: 192.168.9.50:30500/angel-intelligence:latest
+        imagePullPolicy: IfNotPresent
         
         command: ["python", "-m", "src.worker.worker"]
         
@@ -156,9 +155,10 @@ spec:
         resources:
           limits:
             nvidia.com/gpu: 1
+            memory: "2Gi"
           requests:
-            memory: "4Gi"
-            cpu: "2"
+            memory: "1.5Gi"
+            cpu: "1"
         
         volumeMounts:
         - name: models
@@ -192,7 +192,7 @@ metadata:
     app: angel-intelligence
     component: api
 spec:
-  replicas: 2
+  replicas: 1
   selector:
     matchLabels:
       app: angel-intelligence
@@ -205,10 +205,10 @@ spec:
     spec:
       containers:
       - name: api
-        image: angel-intelligence:jetson-latest
-        imagePullPolicy: Never
+        image: 192.168.9.50:30500/angel-intelligence:latest
+        imagePullPolicy: IfNotPresent
         
-        command: ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
+        command: ["python3.9", "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
         
         ports:
         - containerPort: 8000
@@ -250,11 +250,11 @@ spec:
         
         resources:
           requests:
+            memory: "256Mi"
+            cpu: "250m"
+          limits:
             memory: "512Mi"
             cpu: "500m"
-          limits:
-            memory: "1Gi"
-            cpu: "1"
         
         livenessProbe:
           httpGet:
@@ -301,11 +301,11 @@ spec:
     spec:
       containers:
       - name: interactive
-        image: angel-intelligence:jetson-latest
-        imagePullPolicy: Never
+        image: 192.168.9.50:30500/angel-intelligence:latest
+        imagePullPolicy: IfNotPresent
         
         # Run the API server which handles interactive requests
-        command: ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]
+        command: ["python3.9", "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
         
         env:
         - name: ANGEL_ENV
@@ -365,9 +365,10 @@ spec:
         resources:
           limits:
             nvidia.com/gpu: 1
+            memory: "2Gi"
           requests:
-            memory: "4Gi"
-            cpu: "2"
+            memory: "1.5Gi"
+            cpu: "1"
         
         volumeMounts:
         - name: models
@@ -433,10 +434,11 @@ metadata:
   labels:
     app: angel-intelligence
 spec:
-  type: LoadBalancer
+  type: NodePort
   ports:
   - port: 80
     targetPort: 8000
+    nodePort: 30800
     protocol: TCP
     name: http
   selector:
