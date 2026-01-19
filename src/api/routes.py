@@ -115,12 +115,20 @@ class ChatRequest(BaseModel):
     message: str
     recording_id: Optional[int] = None
     conversation_id: Optional[str] = None
+    # Fields for new conversation creation (when conversation_id is null)
+    user_id: Optional[int] = None
+    feature: Optional[str] = "general"
+    filters: Optional[dict] = None
 
 
 class ChatResponse(BaseModel):
     """Chat conversation response."""
+    success: bool = True
     response: str
     conversation_id: str
+    message_id: Optional[int] = None
+    error: Optional[str] = None
+    error_type: Optional[str] = None
 
 
 # =============================================================================
@@ -152,7 +160,7 @@ async def health():
     # Check interactive service status
     interactive_status = {"available": False, "model_loaded": False}
     try:
-        from src.services import get_interactive_service
+        from src.services.interactive import get_interactive_service
         service = get_interactive_service()
         interactive_status = service.get_status()
     except Exception:
@@ -392,117 +400,169 @@ async def chat(request: ChatRequest):
     """
     Chat with the AI about call data.
     
-    Can reference a specific recording or ask general questions.
-    Uses the interactive service on dedicated node(s).
+    Handles both new conversations and existing ones:
+    - New conversation: Creates conversation + messages atomically in a transaction
+    - Existing conversation: Appends messages to existing conversation
+    
+    If AI processing fails, the transaction rolls back - no orphaned records.
     """
     import time
-    import uuid
-    from src.services import get_interactive_service
+    from src.services.interactive import get_interactive_service
     from src.database import ChatConversation, ChatMessage
     
     request_start = time.time()
     logger.info(f"[TIMING] Chat request received at {request_start}")
     
     db = get_db_connection()
+    conversation_id = None
+    is_new_conversation = False
+    assistant_message_id = None
     
-    # Generate or use existing conversation ID
-    if request.conversation_id:
-        conversation_id = request.conversation_id
-        # Verify conversation exists
-        conversation = ChatConversation.get_by_id(conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-    else:
-        # Create new conversation
-        conversation = ChatConversation(
-            user_id=0,  # TODO: Get from auth
-            feature="call_quality",
-            title=request.message[:100] if len(request.message) > 100 else request.message,
+    try:
+        # Start transaction for atomic operations
+        db.execute("START TRANSACTION")
+        
+        # Determine if this is a new or existing conversation
+        if request.conversation_id:
+            # Existing conversation - verify it exists
+            conversation_id = request.conversation_id
+            conversation = ChatConversation.get_by_id(conversation_id)
+            if not conversation:
+                db.execute("ROLLBACK")
+                raise HTTPException(status_code=404, detail="Conversation not found")
+        else:
+            # New conversation - create atomically with messages
+            if not request.user_id:
+                db.execute("ROLLBACK")
+                raise HTTPException(
+                    status_code=400, 
+                    detail="user_id is required when creating a new conversation"
+                )
+            
+            is_new_conversation = True
+            conversation = ChatConversation(
+                user_id=request.user_id,
+                feature=request.feature or "general",
+                title="New Conversation",  # Pulse will update this later
+                filters=request.filters,
+            )
+            conversation_id = conversation.save()
+            logger.info(f"Created new conversation {conversation_id} for user {request.user_id}")
+        
+        conv_time = time.time()
+        logger.info(f"[TIMING] Conversation setup took {conv_time - request_start:.2f}s")
+        
+        # Save user message
+        user_message = ChatMessage(
+            ai_chat_conversation_id=conversation_id,
+            role="user",
+            content=request.message,
         )
-        conversation_id = conversation.save()
-    
-    conv_time = time.time()
-    logger.info(f"[TIMING] Conversation setup took {conv_time - request_start:.2f}s")
-    
-    # Save user message immediately
-    user_message = ChatMessage(
-        ai_chat_conversation_id=conversation_id,
-        role="user",
-        content=request.message,
-    )
-    user_message.save()
-    
-    save_time = time.time()
-    logger.info(f"[TIMING] Message save took {save_time - conv_time:.2f}s")
-    
-    # Build context if recording specified
-    context = None
-    if request.recording_id:
-        # Get transcription
-        trans = db.fetch_one(
-            "SELECT full_transcript FROM ai_call_transcriptions WHERE ai_call_recording_id = %s",
-            (request.recording_id,)
+        user_message_id = user_message.save()
+        
+        save_time = time.time()
+        logger.info(f"[TIMING] User message save took {save_time - conv_time:.2f}s")
+        
+        # Build context if recording specified
+        context = None
+        if request.recording_id:
+            trans = db.fetch_one(
+                "SELECT full_transcript FROM ai_call_transcriptions WHERE ai_call_recording_id = %s",
+                (request.recording_id,)
+            )
+            analysis = db.fetch_one(
+                "SELECT summary, sentiment_label, quality_score FROM ai_call_analysis WHERE ai_call_recording_id = %s",
+                (request.recording_id,)
+            )
+            
+            context_parts = []
+            if trans:
+                context_parts.append(f"Transcript: {trans['full_transcript'][:2000]}")
+            if analysis:
+                context_parts.append(f"Summary: {analysis['summary']}")
+                context_parts.append(f"Sentiment: {analysis['sentiment_label']}, Quality: {analysis['quality_score']}")
+            
+            if context_parts:
+                context = "\n".join(context_parts)
+        
+        context_time = time.time()
+        logger.info(f"[TIMING] Context build took {context_time - save_time:.2f}s")
+        
+        # Use interactive service for AI response
+        logger.info(f"[TIMING] Starting AI generation...")
+        settings = get_settings()
+        
+        if settings.worker_mode == "api" and settings.interactive_service_url:
+            from src.services.interactive_proxy import get_interactive_proxy
+            proxy = get_interactive_proxy()
+            result = proxy.chat(
+                message=request.message,
+                context=context,
+            )
+            logger.info(f"[TIMING] AI generation via proxy completed")
+        else:
+            service = get_interactive_service()
+            result = service.chat(
+                message=request.message,
+                context=context,
+            )
+        
+        # Check for AI errors - rollback if failed
+        if result.get("error"):
+            db.execute("ROLLBACK")
+            error_type = result.get("error_type", "unknown")
+            error_msg = result.get("error_message") or result.get("response", "AI service error")
+            logger.error(f"Chat error: {error_type} - {error_msg}")
+            
+            return ChatResponse(
+                success=False,
+                response="",
+                conversation_id=str(conversation_id) if conversation_id and not is_new_conversation else "",
+                error=error_msg,
+                error_type=error_type,
+            )
+        
+        ai_time = time.time()
+        logger.info(f"[TIMING] AI generation took {ai_time - context_time:.2f}s")
+        
+        # Save assistant response
+        assistant_message = ChatMessage(
+            ai_chat_conversation_id=conversation_id,
+            role="assistant",
+            content=result["response"],
+        )
+        assistant_message_id = assistant_message.save()
+        
+        # Commit transaction - all records saved atomically
+        db.execute("COMMIT")
+        
+        total_time = time.time()
+        logger.info(f"[TIMING] Total request took {total_time - request_start:.2f}s")
+        
+        return ChatResponse(
+            success=True,
+            response=result["response"],
+            conversation_id=str(conversation_id),
+            message_id=assistant_message_id,
         )
         
-        # Get analysis
-        analysis = db.fetch_one(
-            "SELECT summary, sentiment_label, quality_score FROM ai_call_analysis WHERE ai_call_recording_id = %s",
-            (request.recording_id,)
+    except HTTPException:
+        # Re-raise HTTP exceptions (already handled)
+        raise
+    except Exception as e:
+        # Rollback on any unexpected error
+        try:
+            db.execute("ROLLBACK")
+        except:
+            pass
+        logger.error(f"Chat endpoint error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": str(e),
+                "error_type": "internal_error",
+            }
         )
-        
-        context_parts = []
-        if trans:
-            context_parts.append(f"Transcript: {trans['full_transcript'][:2000]}")
-        if analysis:
-            context_parts.append(f"Summary: {analysis['summary']}")
-            context_parts.append(f"Sentiment: {analysis['sentiment_label']}, Quality: {analysis['quality_score']}")
-        
-        if context_parts:
-            context = "\n".join(context_parts)
-    
-    context_time = time.time()
-    logger.info(f"[TIMING] Context build took {context_time - save_time:.2f}s")
-    
-    # Use interactive service for AI response
-    # In API mode, proxy to interactive workers; otherwise run locally
-    logger.info(f"[TIMING] Starting AI generation...")
-    settings = get_settings()
-    
-    if settings.worker_mode == "api" and settings.interactive_service_url:
-        # Proxy to interactive service for load balancing across workers
-        from src.services.interactive_proxy import get_interactive_proxy
-        proxy = get_interactive_proxy()
-        result = proxy.chat(
-            message=request.message,
-            context=context,
-        )
-        logger.info(f"[TIMING] AI generation via proxy completed")
-    else:
-        # Run locally (interactive or both mode)
-        service = get_interactive_service()
-        result = service.chat(
-            message=request.message,
-            context=context,
-        )
-    
-    ai_time = time.time()
-    logger.info(f"[TIMING] AI generation took {ai_time - context_time:.2f}s")
-    
-    # Save assistant response
-    assistant_message = ChatMessage(
-        ai_chat_conversation_id=conversation_id,
-        role="assistant",
-        content=result["response"],
-    )
-    assistant_message.save()
-    
-    total_time = time.time()
-    logger.info(f"[TIMING] Total request took {total_time - request_start:.2f}s")
-    
-    return ChatResponse(
-        response=result["response"],
-        conversation_id=str(conversation_id),
-    )
 
 
 # =============================================================================
@@ -699,7 +759,7 @@ async def generate_summary(request: SummaryGenerateRequest):
     AI-powered insights and recommendations.
     """
     from src.database import Summary
-    from src.services import get_interactive_service
+    from src.services.interactive import get_interactive_service
     
     db = get_db_connection()
     
@@ -762,12 +822,25 @@ async def generate_summary(request: SummaryGenerateRequest):
             custom_prompt=f"Generate a summary for: {filters}",
         )
     else:
-        from src.services import get_interactive_service
+        from src.services.interactive import get_interactive_service
         service = get_interactive_service()
         result = service.generate_summary(
             data=data,
             summary_type="monthly",
             filters=filters,
+        )
+    
+    # Check for proxy errors and raise HTTPException
+    if result.get("error"):
+        error_type = result.get("error_type", "unknown")
+        error_msg = result.get("error_message") or result.get("summary", "AI service error")
+        logger.error(f"Summary error: {error_type} - {error_msg}")
+        raise HTTPException(
+            status_code=503 if error_type in ["timeout", "connection_error"] else 500,
+            detail={
+                "error": error_msg,
+                "error_type": error_type,
+            }
         )
     
     summary_data = {
@@ -1042,6 +1115,8 @@ class EnhancedChatRequest(BaseModel):
     """Enhanced chat request matching specification."""
     message: str
     conversation_id: Optional[int] = None
+    # Fields for new conversation creation (when conversation_id is null)
+    user_id: Optional[int] = None
     feature: str = "call_quality"
     filters: Optional[dict] = None
     history: Optional[List[dict]] = None
@@ -1051,7 +1126,11 @@ class EnhancedChatResponse(BaseModel):
     """Enhanced chat response."""
     success: bool
     response: str
-    metadata: dict
+    conversation_id: Optional[int] = None
+    message_id: Optional[int] = None
+    metadata: Optional[dict] = None
+    error: Optional[str] = None
+    error_type: Optional[str] = None
 
 
 @router.post(
@@ -1063,164 +1142,216 @@ async def enhanced_chat(request: EnhancedChatRequest):
     """
     Chat with the AI about call data.
     
-    Uses the interactive service on dedicated node(s).
-    Can filter by client, campaign, agent, and date range.
+    Handles both new conversations and existing ones atomically:
+    - New conversation: Creates conversation + messages in a transaction
+    - Existing conversation: Appends messages to existing conversation
+    
+    If AI processing fails, the transaction rolls back - no orphaned records.
     """
     from src.database import ChatConversation, ChatMessage
-    from src.services import get_interactive_service
+    from src.services.interactive import get_interactive_service
     import json
     
     db = get_db_connection()
-    
-    # Get or create conversation
-    if request.conversation_id:
-        conversation = ChatConversation.get_by_id(request.conversation_id)
-        if not conversation:
-            raise HTTPException(status_code=404, detail="Conversation not found")
-        conversation_id = conversation.id
-    else:
-        # Create new conversation
-        conversation = ChatConversation(
-            user_id=0,  # TODO: Get from auth
-            feature=request.feature,
-            filters=request.filters,
-            title=request.message[:100] if len(request.message) > 100 else request.message,
-        )
-        conversation_id = conversation.save()
-    
-    # Save user message
-    user_message = ChatMessage(
-        ai_chat_conversation_id=conversation_id,
-        role="user",
-        content=request.message,
-    )
-    user_message.save()
-    
-    # Build context from filtered data
-    context_parts = []
+    conversation_id = None
+    is_new_conversation = False
+    assistant_message_id = None
     context_calls = 0
     
-    if request.filters:
-        # Get aggregated metrics and recent calls
-        query = """
-            SELECT 
-                COUNT(*) as cnt, 
-                AVG(a.quality_score) as avg_quality, 
-                AVG(a.sentiment_score) as avg_sentiment,
-                SUM(r.duration_seconds) as total_duration
-            FROM ai_call_recordings r 
-            LEFT JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id 
-            WHERE 1=1
-        """
-        params = []
+    try:
+        # Start transaction for atomic operations
+        db.execute("START TRANSACTION")
         
-        if request.filters.get("client_ref"):
-            query += " AND r.client_ref = %s"
-            params.append(request.filters["client_ref"])
-        
-        if request.filters.get("start_date"):
-            query += " AND r.call_date >= %s"
-            params.append(request.filters["start_date"])
-        
-        if request.filters.get("end_date"):
-            query += " AND r.call_date <= %s"
-            params.append(request.filters["end_date"])
-        
-        result = db.fetch_one(query, tuple(params))
-        if result:
-            context_calls = result["cnt"] or 0
-            avg_quality = result["avg_quality"] or 0
-            avg_sentiment = result["avg_sentiment"] or 0
-            total_duration = result["total_duration"] or 0
+        # Get or create conversation
+        if request.conversation_id:
+            conversation = ChatConversation.get_by_id(request.conversation_id)
+            if not conversation:
+                db.execute("ROLLBACK")
+                raise HTTPException(status_code=404, detail="Conversation not found")
+            conversation_id = conversation.id
+        else:
+            # New conversation - create atomically with messages
+            if not request.user_id:
+                db.execute("ROLLBACK")
+                raise HTTPException(
+                    status_code=400,
+                    detail="user_id is required when creating a new conversation"
+                )
             
-            context_parts.append(f"**Available Data:** {context_calls} calls analysed")
-            if request.filters.get("start_date") or request.filters.get("end_date"):
-                # Convert dates to UK format (DD/MM/YYYY)
-                from datetime import datetime
-                start_uk = datetime.strptime(request.filters.get("start_date", ""), "%Y-%m-%d").strftime("%d/%m/%Y") if request.filters.get("start_date") else "start"
-                end_uk = datetime.strptime(request.filters.get("end_date", ""), "%Y-%m-%d").strftime("%d/%m/%Y") if request.filters.get("end_date") else "now"
-                context_parts.append(f"Period: {start_uk} to {end_uk}")
-            if request.filters.get("client_ref"):
-                context_parts.append(f"Client: {request.filters['client_ref']}")
-            context_parts.append(f"Average Quality Score: {avg_quality:.1f}%")
-            context_parts.append(f"Average Sentiment: {avg_sentiment:.1f}/10")
-            context_parts.append(f"Total Duration: {total_duration // 60:.0f} minutes")
-            
-            # Get topic breakdown if available
-            topic_query = """
-                SELECT key_topics
-                FROM ai_call_analysis a
-                JOIN ai_call_recordings r ON a.ai_call_recording_id = r.id
-                WHERE 1=1 AND a.key_topics IS NOT NULL
+            is_new_conversation = True
+            conversation = ChatConversation(
+                user_id=request.user_id,
+                feature=request.feature,
+                filters=request.filters,
+                title="New Conversation",  # Pulse will update this later
+            )
+            conversation_id = conversation.save()
+            logger.info(f"Created new conversation {conversation_id} for user {request.user_id}")
+        
+        # Save user message
+        user_message = ChatMessage(
+            ai_chat_conversation_id=conversation_id,
+            role="user",
+            content=request.message,
+        )
+        user_message.save()
+        
+        # Build context from filtered data
+        context_parts = []
+        
+        if request.filters:
+            # Get aggregated metrics and recent calls
+            query = """
+                SELECT 
+                    COUNT(*) as cnt, 
+                    AVG(a.quality_score) as avg_quality, 
+                    AVG(a.sentiment_score) as avg_sentiment,
+                    SUM(r.duration_seconds) as total_duration
+                FROM ai_call_recordings r 
+                LEFT JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id 
+                WHERE 1=1
             """
+            params = []
+            
+            if request.filters.get("client_ref"):
+                query += " AND r.client_ref = %s"
+                params.append(request.filters["client_ref"])
+            
             if request.filters.get("start_date"):
-                topic_query += " AND r.call_date >= %s"
+                query += " AND r.call_date >= %s"
+                params.append(request.filters["start_date"])
+            
             if request.filters.get("end_date"):
-                topic_query += " AND r.call_date <= %s"
+                query += " AND r.call_date <= %s"
+                params.append(request.filters["end_date"])
             
-            topic_query += " LIMIT 50"
-            
-            topics_results = db.fetch_all(topic_query, tuple([f for f in [request.filters.get("start_date"), request.filters.get("end_date")] if f]))
-            if topics_results:
-                all_topics = {}
-                for row in topics_results:
-                    if row.get("key_topics"):
-                        import json
-                        try:
-                            topics = json.loads(row["key_topics"]) if isinstance(row["key_topics"], str) else row["key_topics"]
-                            if isinstance(topics, list):
-                                for topic in topics:
-                                    topic_name = topic.get("name") if isinstance(topic, dict) else str(topic)
-                                    all_topics[topic_name] = all_topics.get(topic_name, 0) + 1
-                        except:
-                            pass
+            result = db.fetch_one(query, tuple(params))
+            if result:
+                context_calls = result["cnt"] or 0
+                avg_quality = result["avg_quality"] or 0
+                avg_sentiment = result["avg_sentiment"] or 0
+                total_duration = result["total_duration"] or 0
                 
-                if all_topics:
-                    top_topics = sorted(all_topics.items(), key=lambda x: x[1], reverse=True)[:5]
-                    context_parts.append(f"\n**Common Topics:** {', '.join([f'{t[0]} ({t[1]} calls)' for t in top_topics])}")
-    
-    # Use interactive service for AI response
-    # In API mode, proxy to interactive workers; otherwise run locally
-    context = "\n".join(context_parts) if context_parts else None
-    settings = get_settings()
-    
-    if settings.worker_mode == "api" and settings.interactive_service_url:
-        from src.services.interactive_proxy import get_interactive_proxy
-        proxy = get_interactive_proxy()
-        result = proxy.chat(
-            message=request.message,
-            context=context,
+                context_parts.append(f"**Available Data:** {context_calls} calls analysed")
+                if request.filters.get("start_date") or request.filters.get("end_date"):
+                    from datetime import datetime
+                    start_uk = datetime.strptime(request.filters.get("start_date", ""), "%Y-%m-%d").strftime("%d/%m/%Y") if request.filters.get("start_date") else "start"
+                    end_uk = datetime.strptime(request.filters.get("end_date", ""), "%Y-%m-%d").strftime("%d/%m/%Y") if request.filters.get("end_date") else "now"
+                    context_parts.append(f"Period: {start_uk} to {end_uk}")
+                if request.filters.get("client_ref"):
+                    context_parts.append(f"Client: {request.filters['client_ref']}")
+                context_parts.append(f"Average Quality Score: {avg_quality:.1f}%")
+                context_parts.append(f"Average Sentiment: {avg_sentiment:.1f}/10")
+                context_parts.append(f"Total Duration: {total_duration // 60:.0f} minutes")
+                
+                # Get topic breakdown if available
+                topic_query = """
+                    SELECT key_topics
+                    FROM ai_call_analysis a
+                    JOIN ai_call_recordings r ON a.ai_call_recording_id = r.id
+                    WHERE 1=1 AND a.key_topics IS NOT NULL
+                """
+                if request.filters.get("start_date"):
+                    topic_query += " AND r.call_date >= %s"
+                if request.filters.get("end_date"):
+                    topic_query += " AND r.call_date <= %s"
+                
+                topic_query += " LIMIT 50"
+                
+                topics_results = db.fetch_all(topic_query, tuple([f for f in [request.filters.get("start_date"), request.filters.get("end_date")] if f]))
+                if topics_results:
+                    all_topics = {}
+                    for row in topics_results:
+                        if row.get("key_topics"):
+                            try:
+                                topics = json.loads(row["key_topics"]) if isinstance(row["key_topics"], str) else row["key_topics"]
+                                if isinstance(topics, list):
+                                    for topic in topics:
+                                        topic_name = topic.get("name") if isinstance(topic, dict) else str(topic)
+                                        all_topics[topic_name] = all_topics.get(topic_name, 0) + 1
+                            except:
+                                pass
+                    
+                    if all_topics:
+                        top_topics = sorted(all_topics.items(), key=lambda x: x[1], reverse=True)[:5]
+                        context_parts.append(f"\n**Common Topics:** {', '.join([f'{t[0]} ({t[1]} calls)' for t in top_topics])}")
+        
+        # Use interactive service for AI response
+        context = "\n".join(context_parts) if context_parts else None
+        settings = get_settings()
+        
+        if settings.worker_mode == "api" and settings.interactive_service_url:
+            from src.services.interactive_proxy import get_interactive_proxy
+            proxy = get_interactive_proxy()
+            result = proxy.chat(
+                message=request.message,
+                context=context,
+            )
+        else:
+            service = get_interactive_service()
+            result = service.chat(
+                message=request.message,
+                context=context,
+            )
+        
+        # Check for AI errors - rollback if failed
+        if result.get("error"):
+            db.execute("ROLLBACK")
+            error_type = result.get("error_type", "unknown")
+            error_msg = result.get("error_message") or result.get("response", "AI service error")
+            logger.error(f"Chat error: {error_type} - {error_msg}")
+            
+            return EnhancedChatResponse(
+                success=False,
+                response="",
+                conversation_id=conversation_id if not is_new_conversation else None,
+                error=error_msg,
+                error_type=error_type,
+            )
+        
+        response_text = result["response"]
+        
+        # Save assistant message
+        assistant_message = ChatMessage(
+            ai_chat_conversation_id=conversation_id,
+            role="assistant",
+            content=response_text,
+            metadata={"context_calls": context_calls},
         )
-    else:
-        service = get_interactive_service()
-        result = service.chat(
-            message=request.message,
-            context=context,
+        assistant_message_id = assistant_message.save()
+        
+        # Commit transaction - all records saved atomically
+        db.execute("COMMIT")
+        
+        return EnhancedChatResponse(
+            success=True,
+            response=response_text,
+            conversation_id=conversation_id,
+            message_id=assistant_message_id,
+            metadata={
+                "model": result.get("model", "unknown"),
+                "tokens_used": result.get("tokens_used", 0),
+                "context_calls_analysed": context_calls,
+                "processing_time": result.get("processing_time", 0),
+                "format": "markdown",
+            }
         )
-    
-    response_text = result["response"]
-    
-    # Save assistant message
-    assistant_message = ChatMessage(
-        ai_chat_conversation_id=conversation_id,
-        role="assistant",
-        content=response_text,
-        metadata={"context_calls": context_calls},
-    )
-    assistant_message.save()
-    
-    return EnhancedChatResponse(
-        success=True,
-        response=response_text,
-        metadata={
-            "conversation_id": conversation_id,
-            "model": result.get("model", "unknown"),
-            "tokens_used": result.get("tokens_used", 0),
-            "context_calls_analysed": context_calls,
-            "processing_time": result.get("processing_time", 0),
-            "format": "markdown",
-        }
-    )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        try:
+            db.execute("ROLLBACK")
+        except:
+            pass
+        logger.error(f"Enhanced chat endpoint error: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "error": str(e),
+                "error_type": "internal_error",
+            }
+        )
 
 
 # =============================================================================
@@ -1240,11 +1371,12 @@ class InternalChatRequest(BaseModel):
 
 class InternalChatResponse(BaseModel):
     """Internal chat response."""
-    response: str
+    response: str = ""
     generation_time: float = 0.0
     model: str = ""
     error: bool = False
     error_type: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class InternalSummaryRequest(BaseModel):
@@ -1256,9 +1388,11 @@ class InternalSummaryRequest(BaseModel):
 
 class InternalSummaryResponse(BaseModel):
     """Internal summary response."""
-    summary: str
+    summary: str = ""
     generation_time: float = 0.0
     error: bool = False
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
 
 
 class InternalHealthResponse(BaseModel):
@@ -1310,9 +1444,10 @@ async def internal_chat(request: InternalChatRequest):
     except Exception as e:
         logger.error(f"Internal chat error: {e}")
         return InternalChatResponse(
-            response=f"Error: {str(e)}",
+            response="",
             error=True,
             error_type="inference_error",
+            error_message=str(e),
         )
 
 
@@ -1324,7 +1459,7 @@ async def internal_summary(request: InternalSummaryRequest):
     """
     Internal summary endpoint for worker-to-worker communication.
     """
-    from src.services import get_interactive_service
+    from src.services.interactive import get_interactive_service
     
     settings = get_settings()
     
@@ -1350,8 +1485,10 @@ async def internal_summary(request: InternalSummaryRequest):
     except Exception as e:
         logger.error(f"Internal summary error: {e}")
         return InternalSummaryResponse(
-            summary=f"Error: {str(e)}",
+            summary="",
             error=True,
+            error_type="inference_error",
+            error_message=str(e),
         )
 
 
@@ -1372,7 +1509,7 @@ async def internal_health():
     
     if settings.worker_mode in ["interactive", "both"]:
         try:
-            from src.services import get_interactive_service
+            from src.services.interactive import get_interactive_service
             service = get_interactive_service()
             model_loaded = service._model is not None
             device = str(service._device) if hasattr(service, '_device') else "unknown"

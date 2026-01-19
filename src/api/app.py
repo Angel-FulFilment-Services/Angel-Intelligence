@@ -27,7 +27,7 @@ async def lifespan(app: FastAPI):
     if settings.preload_chat_model and settings.worker_mode in ["interactive", "both"]:
         logger.info("Preloading chat model to eliminate first-request delay...")
         try:
-            from src.services import get_interactive_service
+            from src.services.interactive import get_interactive_service
             service = get_interactive_service()
             service._ensure_model_loaded()
             logger.info("Chat model preloaded successfully")

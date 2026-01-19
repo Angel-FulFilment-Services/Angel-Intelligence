@@ -53,6 +53,11 @@ spec:
         # Fix ARM64 OpenMP TLS issue
         - name: LD_PRELOAD
           value: "/usr/lib/aarch64-linux-gnu/libgomp.so.1"
+        # Use local models only - no HuggingFace downloads
+        - name: HF_HUB_OFFLINE
+          value: "1"
+        - name: TRANSFORMERS_OFFLINE
+          value: "1"
         # Environment
         - name: ANGEL_ENV
           value: "production"
@@ -129,11 +134,26 @@ spec:
             configMapKeyRef:
               name: angel-intelligence-config
               key: whisper-model
+        - name: WHISPER_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: whisper-model-path
         - name: ANALYSIS_MODEL
           valueFrom:
             configMapKeyRef:
               name: angel-intelligence-config
               key: analysis-model
+        - name: ANALYSIS_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model-path
+        - name: ANALYSIS_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model-quantization
         - name: TRANSCRIPT_SEGMENTATION
           valueFrom:
             configMapKeyRef:
@@ -164,12 +184,34 @@ spec:
               name: angel-intelligence-config
               key: cuda-visible-devices
 
+        # Chat model (for any interactive features in batch worker)
+        - name: CHAT_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model
+        - name: CHAT_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model-path
+        - name: CHAT_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model-quantization
+        - name: PRELOAD_CHAT_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: preload-chat-model
+
         resources:
           limits:
             nvidia.com/gpu: 1
-            memory: "2Gi"
+            memory: "6Gi"
           requests:
-            memory: "1.5Gi"
+            memory: "4Gi"
             cpu: "1"
 
         volumeMounts:
@@ -294,6 +336,53 @@ spec:
             secretKeyRef:
               name: angel-intelligence-secrets
               key: db-password
+
+        # All model configs (for consistency, even if API proxies)
+        - name: WHISPER_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: whisper-model
+        - name: WHISPER_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: whisper-model-path
+        - name: ANALYSIS_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model
+        - name: ANALYSIS_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model-path
+        - name: ANALYSIS_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model-quantization
+        - name: CHAT_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model
+        - name: CHAT_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model-path
+        - name: CHAT_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model-quantization
+        - name: CUDA_VISIBLE_DEVICES
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: cuda-visible-devices
 
         resources:
           requests:
@@ -426,7 +515,39 @@ spec:
               key: chat-model-quantization
         # Disable preloading - load on first request instead
         - name: PRELOAD_CHAT_MODEL
-          value: "false"
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: preload-chat-model
+
+        # Whisper model
+        - name: WHISPER_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: whisper-model
+        - name: WHISPER_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: whisper-model-path
+
+        # Analysis model
+        - name: ANALYSIS_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model
+        - name: ANALYSIS_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model-path
+        - name: ANALYSIS_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model-quantization
 
         # GPU
         - name: CUDA_VISIBLE_DEVICES

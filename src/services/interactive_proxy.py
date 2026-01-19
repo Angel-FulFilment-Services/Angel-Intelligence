@@ -113,25 +113,28 @@ class InteractiveServiceProxy:
         except httpx.TimeoutException as e:
             logger.error(f"Chat proxy timeout: {e}")
             return {
-                "response": "The AI service is taking longer than expected. Please try again.",
+                "response": "",
                 "error": True,
                 "error_type": "timeout",
+                "error_message": "The AI service is taking longer than expected. Please try again.",
                 "generation_time": 0.0,
             }
         except httpx.HTTPStatusError as e:
             logger.error(f"Chat proxy HTTP error: {e.response.status_code} - {e.response.text}")
             return {
-                "response": f"AI service error: {e.response.status_code}",
+                "response": "",
                 "error": True,
                 "error_type": "http_error",
+                "error_message": f"AI service error: {e.response.status_code}",
                 "generation_time": 0.0,
             }
         except Exception as e:
             logger.error(f"Chat proxy error: {e}")
             return {
-                "response": f"Failed to reach AI service: {str(e)}",
+                "response": "",
                 "error": True,
                 "error_type": "connection_error",
+                "error_message": f"Failed to reach AI service: {str(e)}",
                 "generation_time": 0.0,
             }
     
@@ -169,25 +172,28 @@ class InteractiveServiceProxy:
         except httpx.TimeoutException as e:
             logger.error(f"Async chat proxy timeout: {e}")
             return {
-                "response": "The AI service is taking longer than expected. Please try again.",
+                "response": "",
                 "error": True,
                 "error_type": "timeout",
+                "error_message": "The AI service is taking longer than expected. Please try again.",
                 "generation_time": 0.0,
             }
         except httpx.HTTPStatusError as e:
             logger.error(f"Async chat proxy HTTP error: {e.response.status_code} - {e.response.text}")
             return {
-                "response": f"AI service error: {e.response.status_code}",
+                "response": "",
                 "error": True,
                 "error_type": "http_error",
+                "error_message": f"AI service error: {e.response.status_code}",
                 "generation_time": 0.0,
             }
         except Exception as e:
             logger.error(f"Async chat proxy error: {e}")
             return {
-                "response": f"Failed to reach AI service: {str(e)}",
+                "response": "",
                 "error": True,
                 "error_type": "connection_error",
+                "error_message": f"Failed to reach AI service: {str(e)}",
                 "generation_time": 0.0,
             }
     
@@ -218,8 +224,10 @@ class InteractiveServiceProxy:
         except Exception as e:
             logger.error(f"Summary proxy error: {e}")
             return {
-                "summary": f"Failed to generate summary: {str(e)}",
+                "summary": "",
                 "error": True,
+                "error_type": "connection_error",
+                "error_message": f"Failed to generate summary: {str(e)}",
                 "generation_time": 0.0,
             }
     

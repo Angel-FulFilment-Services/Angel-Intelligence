@@ -9,14 +9,23 @@ data:
   # Processing Configuration
   poll-interval: "30"
   analysis-mode: "audio"
-  whisper-model: "medium"
-  whisper-model-path: "/models/whisper"
-  analysis-model: "Qwen/Qwen2.5-Omni-7B"
-  analysis-model-path: "/models/analysis"
-  chat-model: "Qwen/Qwen2.5-Omni-7B"
-  chat-model-path: "/models/chat"
   transcript-segmentation: "word"
   enable-pii-redaction: "true"
+  preload-chat-model: "false"
+  
+  # Whisper Model
+  whisper-model: "medium"
+  whisper-model-path: "/models/whisper"
+  
+  # Analysis Model (for batch call processing)
+  analysis-model: "Qwen/Qwen2.5-0.5B-Instruct"
+  analysis-model-path: "/models/analysis"
+  analysis-model-quantization: ""
+  
+  # Chat Model (for interactive requests)
+  chat-model: "Qwen/Qwen2.5-0.5B-Instruct"
+  chat-model-path: "/models/chat"
+  chat-model-quantization: ""
   
   # PBX Recording Sources
   pbx-live-url: "https://pbx.angelfs.co.uk/callrec/"

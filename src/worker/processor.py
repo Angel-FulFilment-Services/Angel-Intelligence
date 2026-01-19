@@ -24,7 +24,7 @@ from src.services import (
     AudioDownloader, 
     TranscriptionService, 
     PIIDetector, 
-    AnalysisService,
+    get_analysis_service,
     VoiceFingerprintService,
 )
 
@@ -68,6 +68,7 @@ class CallProcessor:
         self.downloader = AudioDownloader()
         self.transcriber = TranscriptionService()
         self.pii_detector = PIIDetector()
+        AnalysisService = get_analysis_service()
         self.analyser = AnalysisService()
         self.voice_fingerprint = VoiceFingerprintService()
         
