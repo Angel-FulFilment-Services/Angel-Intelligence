@@ -232,10 +232,9 @@ spec:
       # Prefer scheduling on master node to free up GPU node for AI workloads
       affinity:
         nodeAffinity:
-          preferredDuringSchedulingIgnoredDuringExecution:
-          - weight: 100
-            preference:
-              matchExpressions:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
               - key: kubernetes.io/hostname
                 operator: In
                 values:
