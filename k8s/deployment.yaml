@@ -19,6 +19,9 @@ spec:
         app: angel-intelligence
         component: batch-worker
     spec:
+      # Use NVIDIA runtime for GPU access
+      runtimeClassName: nvidia
+      
       hostAliases:
         - ip: "192.168.5.13"
           hostnames:
@@ -344,6 +347,9 @@ spec:
         app: angel-intelligence
         component: interactive
     spec:
+      # Use NVIDIA runtime for GPU access
+      runtimeClassName: nvidia
+      
       hostAliases:
         - ip: "192.168.5.13"
           hostnames:
