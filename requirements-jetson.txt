@@ -27,6 +27,7 @@ python-dotenv>=1.0.0
 # Core Utilities
 # ------------------------------------------------------------------------------
 requests>=2.31.0
+httpx>=0.25.0  # HTTP client for service proxying
 
 # ------------------------------------------------------------------------------
 # Database
@@ -46,16 +47,15 @@ soundfile>=0.12.1
 scipy>=1.7.0,<1.10.0
 
 # ------------------------------------------------------------------------------
-# Transformers and ML (compatible versions for Python 3.8)
+# Transformers and ML (Qwen2.5-Omni requires special transformers branch)
 # ------------------------------------------------------------------------------
-transformers>=4.30.0,<4.40.0
-accelerate>=0.20.0,<0.25.0
-huggingface-hub>=0.16.0,<0.20.0
-tokenizers>=0.13.0,<0.15.0
-safetensors>=0.3.0
-
+# Install Qwen Omni transformers branch (replaces standard transformers)
 git+https://github.com/huggingface/transformers@v4.51.3-Qwen2.5-Omni-preview
-qwen-omni-utils[decord]
+accelerate>=0.20.0
+huggingface-hub>=0.16.0
+tokenizers>=0.13.0
+safetensors>=0.3.0
+qwen-omni-utils
 
 # ------------------------------------------------------------------------------
 # PII Detection

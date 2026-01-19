@@ -92,8 +92,12 @@ class Settings(BaseSettings):
     max_retry_attempts: int = Field(default=3, description="Maximum retry attempts for failed jobs")
     retry_delay_hours: int = Field(default=1, description="Hours to wait before retrying failed jobs")
     
-    # Worker mode: 'batch' for call processing, 'interactive' for chat/summaries, 'both' for all
-    worker_mode: str = Field(default="batch", description="Worker mode: 'batch', 'interactive', or 'both'")
+    # Worker mode: 'batch' for call processing, 'interactive' for chat/summaries, 'api' for API only
+    worker_mode: str = Field(default="batch", description="Worker mode: 'batch', 'interactive', 'api', or 'both'")
+    
+    # Interactive service URL for proxying (used when worker_mode=api)
+    # In K8s, this is the internal service URL: http://angel-intelligence-interactive:8000
+    interactive_service_url: str = Field(default="", description="URL of interactive service for AI proxy")
     
     # Preload models on startup (eliminates first-request delay)
     preload_chat_model: bool = Field(default=True, description="Preload chat model on API startup")

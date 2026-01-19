@@ -11,6 +11,7 @@ python-multipart==0.0.12
 pydantic==2.10.0
 pydantic-settings>=2.0.0
 python-dotenv
+httpx>=0.25.0  # HTTP client for service proxying
 
 # ------------------------------------------------------------------------------
 # Core Dependencies

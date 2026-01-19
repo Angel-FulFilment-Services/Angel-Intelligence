@@ -43,9 +43,13 @@ spec:
         image: 192.168.9.50:30500/angel-intelligence:latest-arm64
         imagePullPolicy: IfNotPresent
 
-        command: ["python", "-m", "src.worker.worker"]
+        # LD_PRELOAD fixes ARM64 OpenMP TLS issue
+        command: ["/bin/sh", "-c", "export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1; python -m src.worker.worker"]
 
         env:
+        # Fix ARM64 OpenMP TLS issue
+        - name: LD_PRELOAD
+          value: "/usr/lib/aarch64-linux-gnu/libgomp.so.1"
         # Environment
         - name: ANGEL_ENV
           value: "production"
@@ -248,6 +252,16 @@ spec:
         env:
         - name: ANGEL_ENV
           value: "production"
+        # Worker mode: api (proxies AI requests to interactive workers)
+        - name: WORKER_MODE
+          value: "api"
+        # Interactive service URL for AI request proxying
+        # Points to the K8s ClusterIP service which load-balances across interactive pods
+        - name: INTERACTIVE_SERVICE_URL
+          value: "http://angel-intelligence-interactive:8000"
+        # Don't preload models - API pod proxies to interactive workers
+        - name: PRELOAD_CHAT_MODEL
+          value: "false"
         - name: API_AUTH_TOKEN
           valueFrom:
             secretKeyRef:
@@ -341,9 +355,13 @@ spec:
         imagePullPolicy: IfNotPresent
 
         # Run the API server which handles interactive requests
-        command: ["python3.9", "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+        # LD_PRELOAD fixes ARM64 OpenMP TLS issue
+        command: ["/bin/sh", "-c", "export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1; python3.9 -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000"]
 
         env:
+        # Fix ARM64 OpenMP TLS issue
+        - name: LD_PRELOAD
+          value: "/usr/lib/aarch64-linux-gnu/libgomp.so.1"
         - name: ANGEL_ENV
           value: "production"
         - name: WORKER_ID
@@ -451,6 +469,8 @@ metadata:
   labels:
     app: angel-intelligence
 spec:
+  # ClusterIP for internal load-balancing across interactive workers
+  # API pods proxy to this service for AI requests
   type: ClusterIP
   ports:
   - port: 8000

@@ -464,12 +464,26 @@ async def chat(request: ChatRequest):
     logger.info(f"[TIMING] Context build took {context_time - save_time:.2f}s")
     
     # Use interactive service for AI response
+    # In API mode, proxy to interactive workers; otherwise run locally
     logger.info(f"[TIMING] Starting AI generation...")
-    service = get_interactive_service()
-    result = service.chat(
-        message=request.message,
-        context=context,
-    )
+    settings = get_settings()
+    
+    if settings.worker_mode == "api" and settings.interactive_service_url:
+        # Proxy to interactive service for load balancing across workers
+        from src.services.interactive_proxy import get_interactive_proxy
+        proxy = get_interactive_proxy()
+        result = proxy.chat(
+            message=request.message,
+            context=context,
+        )
+        logger.info(f"[TIMING] AI generation via proxy completed")
+    else:
+        # Run locally (interactive or both mode)
+        service = get_interactive_service()
+        result = service.chat(
+            message=request.message,
+            context=context,
+        )
     
     ai_time = time.time()
     logger.info(f"[TIMING] AI generation took {ai_time - context_time:.2f}s")
@@ -736,12 +750,25 @@ async def generate_summary(request: SummaryGenerateRequest):
     }
     
     # Use interactive service for AI summary
-    service = get_interactive_service()
-    result = service.generate_summary(
-        data=data,
-        summary_type="monthly",
-        filters=filters,
-    )
+    # In API mode, proxy to interactive workers; otherwise run locally
+    settings = get_settings()
+    
+    if settings.worker_mode == "api" and settings.interactive_service_url:
+        from src.services.interactive_proxy import get_interactive_proxy
+        proxy = get_interactive_proxy()
+        result = proxy.generate_summary(
+            transcript=str(data),  # Pass data as transcript
+            summary_type="monthly",
+            custom_prompt=f"Generate a summary for: {filters}",
+        )
+    else:
+        from src.services import get_interactive_service
+        service = get_interactive_service()
+        result = service.generate_summary(
+            data=data,
+            summary_type="monthly",
+            filters=filters,
+        )
     
     summary_data = {
         "summary": result["summary"],
@@ -1153,13 +1180,23 @@ async def enhanced_chat(request: EnhancedChatRequest):
                     context_parts.append(f"\n**Common Topics:** {', '.join([f'{t[0]} ({t[1]} calls)' for t in top_topics])}")
     
     # Use interactive service for AI response
-    service = get_interactive_service()
+    # In API mode, proxy to interactive workers; otherwise run locally
     context = "\n".join(context_parts) if context_parts else None
+    settings = get_settings()
     
-    result = service.chat(
-        message=request.message,
-        context=context,
-    )
+    if settings.worker_mode == "api" and settings.interactive_service_url:
+        from src.services.interactive_proxy import get_interactive_proxy
+        proxy = get_interactive_proxy()
+        result = proxy.chat(
+            message=request.message,
+            context=context,
+        )
+    else:
+        service = get_interactive_service()
+        result = service.chat(
+            message=request.message,
+            context=context,
+        )
     
     response_text = result["response"]
     
@@ -1183,4 +1220,168 @@ async def enhanced_chat(request: EnhancedChatRequest):
             "processing_time": result.get("processing_time", 0),
             "format": "markdown",
         }
+    )
+
+
+# =============================================================================
+# Internal Endpoints (for worker-to-worker proxying)
+# =============================================================================
+# These endpoints are called by the API pod proxy to delegate AI workloads
+# to interactive worker pods. They bypass the database operations that
+# the public endpoints do.
+
+class InternalChatRequest(BaseModel):
+    """Internal chat request (used for worker proxying)."""
+    message: str
+    context: Optional[str] = None
+    conversation_history: Optional[List[dict]] = None
+    max_tokens: int = 512
+
+
+class InternalChatResponse(BaseModel):
+    """Internal chat response."""
+    response: str
+    generation_time: float = 0.0
+    model: str = ""
+    error: bool = False
+    error_type: Optional[str] = None
+
+
+class InternalSummaryRequest(BaseModel):
+    """Internal summary request."""
+    transcript: str
+    summary_type: str = "brief"
+    custom_prompt: Optional[str] = None
+
+
+class InternalSummaryResponse(BaseModel):
+    """Internal summary response."""
+    summary: str
+    generation_time: float = 0.0
+    error: bool = False
+
+
+class InternalHealthResponse(BaseModel):
+    """Internal health response for interactive service."""
+    status: str
+    model_loaded: bool = False
+    device: str = ""
+    worker_id: str = ""
+
+
+@router.post(
+    "/internal/chat",
+    response_model=InternalChatResponse,
+)
+async def internal_chat(request: InternalChatRequest):
+    """
+    Internal chat endpoint for worker-to-worker communication.
+    
+    This endpoint is called by the API pod proxy to delegate chat
+    requests to interactive workers. It runs the AI inference directly
+    without database operations.
+    """
+    from src.services import get_interactive_service
+    
+    settings = get_settings()
+    
+    # Only allow this endpoint on interactive workers
+    if settings.worker_mode not in ["interactive", "both"]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"This endpoint is only available on interactive workers (current mode: {settings.worker_mode})"
+        )
+    
+    try:
+        service = get_interactive_service()
+        result = service.chat(
+            message=request.message,
+            context=request.context,
+            conversation_history=request.conversation_history,
+            max_tokens=request.max_tokens,
+        )
+        
+        return InternalChatResponse(
+            response=result.get("response", ""),
+            generation_time=result.get("generation_time", 0.0),
+            model=result.get("model", ""),
+            error=False,
+        )
+    except Exception as e:
+        logger.error(f"Internal chat error: {e}")
+        return InternalChatResponse(
+            response=f"Error: {str(e)}",
+            error=True,
+            error_type="inference_error",
+        )
+
+
+@router.post(
+    "/internal/summary",
+    response_model=InternalSummaryResponse,
+)
+async def internal_summary(request: InternalSummaryRequest):
+    """
+    Internal summary endpoint for worker-to-worker communication.
+    """
+    from src.services import get_interactive_service
+    
+    settings = get_settings()
+    
+    if settings.worker_mode not in ["interactive", "both"]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"This endpoint is only available on interactive workers"
+        )
+    
+    try:
+        service = get_interactive_service()
+        result = service.generate_summary(
+            transcript=request.transcript,
+            summary_type=request.summary_type,
+            custom_prompt=request.custom_prompt,
+        )
+        
+        return InternalSummaryResponse(
+            summary=result.get("summary", ""),
+            generation_time=result.get("generation_time", 0.0),
+            error=False,
+        )
+    except Exception as e:
+        logger.error(f"Internal summary error: {e}")
+        return InternalSummaryResponse(
+            summary=f"Error: {str(e)}",
+            error=True,
+        )
+
+
+@router.get(
+    "/internal/health",
+    response_model=InternalHealthResponse,
+)
+async def internal_health():
+    """
+    Internal health check for interactive workers.
+    
+    Returns model status for load balancing decisions.
+    """
+    settings = get_settings()
+    
+    model_loaded = False
+    device = "unknown"
+    
+    if settings.worker_mode in ["interactive", "both"]:
+        try:
+            from src.services import get_interactive_service
+            service = get_interactive_service()
+            model_loaded = service._model is not None
+            device = str(service._device) if hasattr(service, '_device') else "unknown"
+        except Exception:
+            pass
+    
+    return InternalHealthResponse(
+        status="healthy",
+        model_loaded=model_loaded,
+        device=device,
+        worker_id=settings.worker_id,
     )

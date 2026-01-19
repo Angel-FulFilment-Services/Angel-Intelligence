@@ -1,6 +1,9 @@
 # Dockerfile for NVIDIA Jetson - Using dustynv container with Python 3.9+
 FROM dustynv/l4t-pytorch:r35.2.1
 
+# Fix ARM64 OpenMP TLS issue - MUST be set before any Python imports
+ENV LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1
+
 # Set working directory
 WORKDIR /workspace
 
