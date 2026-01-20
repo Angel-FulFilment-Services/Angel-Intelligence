@@ -138,6 +138,73 @@ class InteractiveServiceProxy:
                 "generation_time": 0.0,
             }
     
+    def chat_with_functions(
+        self,
+        message: str,
+        user_name: Optional[str] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        max_tokens: int = 512,
+    ) -> Dict[str, Any]:
+        """
+        Proxy a chat request with SQL Agent function calling support.
+        
+        This enables the AI to query the database to answer questions.
+        """
+        try:
+            payload = {
+                "message": message,
+                "max_tokens": max_tokens,
+                "use_functions": True,
+            }
+            if user_name:
+                payload["user_name"] = user_name
+            if filters:
+                payload["filters"] = filters
+            if conversation_history:
+                payload["conversation_history"] = conversation_history
+            
+            logger.info(f"Proxying chat with functions request to {self.base_url}/internal/chat-functions")
+            
+            response = self.client.post("/internal/chat-functions", json=payload)
+            response.raise_for_status()
+            
+            result = response.json()
+            logger.info(f"Chat with functions proxy succeeded: {len(result.get('response', ''))} chars, {len(result.get('function_calls', []))} function calls")
+            
+            return result
+            
+        except httpx.TimeoutException as e:
+            logger.error(f"Chat with functions proxy timeout: {e}")
+            return {
+                "response": "",
+                "error": True,
+                "error_type": "timeout",
+                "error_message": "The AI service is taking longer than expected. Please try again.",
+                "generation_time": 0.0,
+                "function_calls": [],
+            }
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Chat with functions proxy HTTP error: {e.response.status_code} - {e.response.text}")
+            return {
+                "response": "",
+                "error": True,
+                "error_type": "http_error",
+                "error_message": f"AI service error: {e.response.status_code}",
+                "generation_time": 0.0,
+                "function_calls": [],
+            }
+        except Exception as e:
+            logger.error(f"Chat with functions proxy error: {e}")
+            return {
+                "response": "",
+                "error": True,
+                "error_type": "connection_error",
+                "error_message": f"Failed to reach AI service: {str(e)}",
+                "generation_time": 0.0,
+                "function_calls": [],
+            }
+    
     async def chat_async(
         self,
         message: str,

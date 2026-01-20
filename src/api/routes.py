@@ -505,23 +505,25 @@ async def chat(request: ChatRequest):
         context_time = time.time()
         logger.info(f"[TIMING] Context build took {context_time - save_time:.2f}s")
         
-        # Use interactive service for AI response
-        logger.info(f"[TIMING] Starting AI generation...")
+        # Use interactive service for AI response with SQL Agent
+        logger.info(f"[TIMING] Starting AI generation with SQL Agent...")
         settings = get_settings()
         
         if settings.worker_mode == "api" and settings.interactive_service_url:
             from src.services.interactive_proxy import get_interactive_proxy
             proxy = get_interactive_proxy()
-            result = proxy.chat(
+            result = proxy.chat_with_functions(
                 message=request.message,
-                context=context,
+                user_name=user_name,
+                filters=request.filters,
             )
             logger.info(f"[TIMING] AI generation via proxy completed")
         else:
             service = get_interactive_service()
-            result = service.chat(
+            result = service.chat_with_functions(
                 message=request.message,
-                context=context,
+                user_name=user_name,
+                filters=request.filters,
             )
         
         # Check for AI errors - rollback if failed
@@ -1311,15 +1313,17 @@ async def enhanced_chat(request: EnhancedChatRequest):
         if settings.worker_mode == "api" and settings.interactive_service_url:
             from src.services.interactive_proxy import get_interactive_proxy
             proxy = get_interactive_proxy()
-            result = proxy.chat(
+            result = proxy.chat_with_functions(
                 message=request.message,
-                context=context,
+                user_name=user_name,
+                filters=request.filters,
             )
         else:
             service = get_interactive_service()
-            result = service.chat(
+            result = service.chat_with_functions(
                 message=request.message,
-                context=context,
+                user_name=user_name,
+                filters=request.filters,
             )
         
         # Check for AI errors - rollback if failed
@@ -1344,7 +1348,10 @@ async def enhanced_chat(request: EnhancedChatRequest):
             ai_chat_conversation_id=conversation_id,
             role="assistant",
             content=response_text,
-            metadata={"context_calls": context_calls},
+            metadata={
+                "context_calls": context_calls,
+                "function_calls": result.get("function_calls", []),
+            },
         )
         assistant_message_id = assistant_message.save()
         
@@ -1361,6 +1368,7 @@ async def enhanced_chat(request: EnhancedChatRequest):
                 "tokens_used": result.get("tokens_used", 0),
                 "context_calls_analysed": context_calls,
                 "processing_time": result.get("processing_time", 0),
+                "function_calls": len(result.get("function_calls", [])),
                 "format": "markdown",
             }
         )
@@ -1423,6 +1431,27 @@ class InternalSummaryResponse(BaseModel):
     error_message: Optional[str] = None
 
 
+class InternalChatFunctionsRequest(BaseModel):
+    """Internal chat with functions request (SQL Agent mode)."""
+    message: str
+    user_name: Optional[str] = None
+    filters: Optional[dict] = None
+    conversation_history: Optional[List[dict]] = None
+    max_tokens: int = 512
+    use_functions: bool = True
+
+
+class InternalChatFunctionsResponse(BaseModel):
+    """Internal chat with functions response."""
+    response: str = ""
+    generation_time: float = 0.0
+    model: str = ""
+    function_calls: List[dict] = []
+    error: bool = False
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+
+
 class InternalHealthResponse(BaseModel):
     """Internal health response for interactive service."""
     status: str
@@ -1434,10 +1463,15 @@ class InternalHealthResponse(BaseModel):
 @router.post(
     "/internal/chat",
     response_model=InternalChatResponse,
+    deprecated=True,
 )
 async def internal_chat(request: InternalChatRequest):
     """
     Internal chat endpoint for worker-to-worker communication.
+    
+    .. deprecated::
+        Use /internal/chat-functions instead. This endpoint does not have
+        SQL Agent capabilities. Kept for backwards compatibility.
     
     This endpoint is called by the API pod proxy to delegate chat
     requests to interactive workers. It runs the AI inference directly
@@ -1472,6 +1506,54 @@ async def internal_chat(request: InternalChatRequest):
     except Exception as e:
         logger.error(f"Internal chat error: {e}")
         return InternalChatResponse(
+            response="",
+            error=True,
+            error_type="inference_error",
+            error_message=str(e),
+        )
+
+
+@router.post(
+    "/internal/chat-functions",
+    response_model=InternalChatFunctionsResponse,
+)
+async def internal_chat_functions(request: InternalChatFunctionsRequest):
+    """
+    Internal chat with SQL Agent functions endpoint.
+    
+    This endpoint enables AI to query the database to answer questions.
+    Called by the API pod proxy to delegate to interactive workers.
+    """
+    from src.services.interactive import get_interactive_service
+    
+    settings = get_settings()
+    
+    if settings.worker_mode not in ["interactive", "both"]:
+        raise HTTPException(
+            status_code=403,
+            detail=f"This endpoint is only available on interactive workers"
+        )
+    
+    try:
+        service = get_interactive_service()
+        result = service.chat_with_functions(
+            message=request.message,
+            user_name=request.user_name,
+            filters=request.filters,
+            conversation_history=request.conversation_history,
+            max_tokens=request.max_tokens,
+        )
+        
+        return InternalChatFunctionsResponse(
+            response=result.get("response", ""),
+            generation_time=result.get("processing_time", 0.0),
+            model=result.get("model", ""),
+            function_calls=result.get("function_calls", []),
+            error=False,
+        )
+    except Exception as e:
+        logger.error(f"Internal chat-functions error: {e}")
+        return InternalChatFunctionsResponse(
             response="",
             error=True,
             error_type="inference_error",

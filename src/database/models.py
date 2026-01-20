@@ -36,6 +36,9 @@ class CallRecording:
     id: int
     apex_id: str
     call_date: datetime
+    orderref: Optional[str] = None            # Order reference number
+    enqref: Optional[str] = None              # Enquiry reference number
+    obref: Optional[str] = None               # Outbound reference number
     client_ref: Optional[str] = None          # Client reference code
     campaign: Optional[str] = None            # Campaign name
     halo_id: Optional[int] = None             # Agent ID from Halo system
@@ -66,6 +69,9 @@ class CallRecording:
             id=row["id"],
             apex_id=row["apex_id"],
             call_date=row.get("call_date"),
+            orderref=row.get("orderref"),
+            enqref=row.get("enqref"),
+            obref=row.get("obref"),
             client_ref=row.get("client_ref"),
             campaign=row.get("campaign"),
             halo_id=row.get("halo_id"),

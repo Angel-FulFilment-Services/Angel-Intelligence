@@ -56,6 +56,9 @@ CREATE TABLE ai_call_recordings (
     
     -- Recording identifiers
     apex_id VARCHAR(255) NOT NULL UNIQUE,
+    orderref VARCHAR(100) DEFAULT NULL,      -- Order reference number
+    enqref VARCHAR(100) DEFAULT NULL,        -- Enquiry reference number
+    obref VARCHAR(100) DEFAULT NULL,         -- Outbound reference number
     client_ref VARCHAR(100) DEFAULT NULL,
     campaign VARCHAR(100) DEFAULT NULL,
     halo_id INT UNSIGNED DEFAULT NULL,

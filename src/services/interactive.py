@@ -128,6 +128,11 @@ class InteractiveService:
         """
         Generate a chat response.
         
+        .. deprecated::
+            Use chat_with_functions() instead. This method does not have
+            SQL Agent capabilities and uses a legacy system prompt.
+            Kept for backwards compatibility with /internal/chat endpoint.
+        
         Args:
             message: User's message
             context: Optional context (e.g., call transcript, analysis)
@@ -416,6 +421,341 @@ Is there a specific aspect of the calls you'd like me to analyse further?""",
         if self.use_mock:
             return True
         return QWEN_AVAILABLE
+    
+    def chat_with_functions(
+        self,
+        message: str,
+        user_name: Optional[str] = None,
+        filters: Optional[Dict[str, Any]] = None,
+        conversation_history: Optional[List[Dict[str, str]]] = None,
+        max_tokens: int = 512,
+        max_function_calls: int = 5,
+    ) -> Dict[str, Any]:
+        """
+        Chat with SQL Agent function calling support.
+        
+        This method enables the AI to query the database to answer questions.
+        It handles the function calling loop, executing queries and feeding
+        results back to the AI until it has enough information to respond.
+        
+        Args:
+            message: User's message
+            user_name: User's name for personalization
+            filters: Active filters from UI (date range, client, etc.)
+            conversation_history: Previous messages
+            max_tokens: Maximum response tokens
+            max_function_calls: Maximum function calls allowed per request
+            
+        Returns:
+            Dict with response text and metadata
+        """
+        from src.services.sql_agent import (
+            get_sql_agent_system_prompt,
+            SQL_AGENT_FUNCTIONS,
+            handle_function_call,
+        )
+        import json
+        
+        start_time = time.time()
+        function_calls_made = []
+        
+        if self.use_mock:
+            return self._mock_chat_with_functions(message, user_name, filters)
+        
+        self._ensure_model_loaded()
+        
+        # Build messages with SQL Agent system prompt
+        messages = []
+        system_prompt = get_sql_agent_system_prompt(user_name, filters)
+        messages.append({"role": "system", "content": system_prompt})
+        
+        # Add conversation history
+        if conversation_history:
+            messages.extend(conversation_history)
+        
+        # Add current message
+        messages.append({"role": "user", "content": message})
+        
+        # Function calling loop
+        for iteration in range(max_function_calls + 1):
+            try:
+                # Generate response
+                inputs = self._tokenizer.apply_chat_template(
+                    messages,
+                    return_tensors="pt",
+                    add_generation_prompt=True
+                ).to(self._device)
+                
+                with torch.no_grad():
+                    outputs = self._model.generate(
+                        inputs,
+                        max_new_tokens=max_tokens,
+                        do_sample=True,
+                        temperature=0.6,
+                        top_p=0.85,
+                        pad_token_id=self._tokenizer.eos_token_id,
+                        repetition_penalty=1.1,
+                    )
+                
+                response_tokens = outputs[0][inputs.shape[1]:]
+                response_text = self._tokenizer.decode(response_tokens, skip_special_tokens=True).strip()
+                
+                # Check if the response contains a function call
+                # Look for patterns like: FUNCTION_CALL: execute_sql_query(...)
+                # or JSON-like function calls
+                function_call = self._extract_function_call(response_text)
+                
+                if function_call and iteration < max_function_calls:
+                    # Execute the function
+                    func_name = function_call.get("name")
+                    func_args = function_call.get("arguments", {})
+                    
+                    logger.info(f"SQL Agent calling function: {func_name}")
+                    result = handle_function_call(func_name, func_args)
+                    
+                    function_calls_made.append({
+                        "function": func_name,
+                        "arguments": func_args,
+                        "result_rows": result.get("row_count", 0),
+                        "success": result.get("success", False),
+                    })
+                    
+                    # Add the function call and result to messages
+                    messages.append({
+                        "role": "assistant",
+                        "content": f"FUNCTION_CALL: {func_name}\nARGUMENTS: {json.dumps(func_args)}"
+                    })
+                    
+                    # Format result for the model
+                    if result.get("success"):
+                        result_text = f"FUNCTION_RESULT:\n{json.dumps(result.get('data', []), indent=2, default=str)[:4000]}"
+                        if result.get("row_count", 0) > 10:
+                            result_text += f"\n... ({result['row_count']} total rows)"
+                    else:
+                        result_text = f"FUNCTION_ERROR: {result.get('error', 'Unknown error')}"
+                    
+                    messages.append({
+                        "role": "user",
+                        "content": result_text
+                    })
+                    
+                    # Continue the loop to let the model process the result
+                    continue
+                else:
+                    # No function call or max iterations reached - return the response
+                    # Clean up any function call syntax that might have leaked through
+                    clean_response = self._clean_function_syntax(response_text)
+                    
+                    return {
+                        "response": clean_response,
+                        "tokens_used": len(response_tokens),
+                        "processing_time": time.time() - start_time,
+                        "model": self.settings.chat_model,
+                        "function_calls": function_calls_made,
+                    }
+                    
+            except Exception as e:
+                logger.error(f"Chat with functions failed: {e}")
+                raise
+        
+        # Shouldn't reach here, but just in case
+        return {
+            "response": "I apologize, but I had trouble processing your request. Please try again.",
+            "tokens_used": 0,
+            "processing_time": time.time() - start_time,
+            "model": self.settings.chat_model,
+            "function_calls": function_calls_made,
+            "error": "Max function calls exceeded",
+        }
+    
+    def _extract_function_call(self, response_text: str) -> Optional[Dict[str, Any]]:
+        """
+        Extract function call from response text.
+        
+        Looks for patterns like:
+        - FUNCTION_CALL: execute_sql_query {"query": "...", "purpose": "..."}
+        - {"function": "execute_sql_query", "arguments": {...}}
+        - execute_sql_query(query="...", purpose="...")
+        """
+        import json
+        import re
+        
+        # Pattern 1: FUNCTION_CALL: name {json}
+        match = re.search(r'FUNCTION_CALL:\s*(\w+)\s*(\{.*\})', response_text, re.DOTALL)
+        if match:
+            try:
+                func_name = match.group(1)
+                args = json.loads(match.group(2))
+                return {"name": func_name, "arguments": args}
+            except json.JSONDecodeError:
+                pass
+        
+        # Pattern 2: Look for execute_sql_query or search_calls with JSON
+        for func_name in ["execute_sql_query", "search_calls"]:
+            pattern = rf'{func_name}\s*[:\(]\s*(\{{.*?\}})'
+            match = re.search(pattern, response_text, re.DOTALL)
+            if match:
+                try:
+                    args = json.loads(match.group(1))
+                    return {"name": func_name, "arguments": args}
+                except json.JSONDecodeError:
+                    pass
+        
+        # Pattern 3: Look for SQL query patterns and convert to function call
+        sql_match = re.search(r'```sql\s*(SELECT.*?)```', response_text, re.DOTALL | re.IGNORECASE)
+        if sql_match:
+            query = sql_match.group(1).strip()
+            return {
+                "name": "execute_sql_query",
+                "arguments": {"query": query, "purpose": "User requested query"}
+            }
+        
+        # Pattern 4: Look for "I'll search for call X" patterns
+        search_match = re.search(r"(?:search|find|look up).*?(?:call|recording).*?['\"]?(\d+)['\"]?", response_text, re.IGNORECASE)
+        if search_match:
+            return {
+                "name": "search_calls",
+                "arguments": {"reference": search_match.group(1), "reference_type": "any"}
+            }
+        
+        return None
+    
+    def _clean_function_syntax(self, text: str) -> str:
+        """Remove any function call syntax from the final response."""
+        import re
+        
+        # Remove FUNCTION_CALL blocks
+        text = re.sub(r'FUNCTION_CALL:.*?(?=\n\n|\Z)', '', text, flags=re.DOTALL)
+        
+        # Remove JSON blocks that look like function calls
+        text = re.sub(r'\{"function":\s*".*?\}', '', text, flags=re.DOTALL)
+        
+        # Remove SQL code blocks if they're the only content
+        if text.strip().startswith('```sql') and text.strip().endswith('```'):
+            text = re.sub(r'```sql.*?```', '', text, flags=re.DOTALL)
+        
+        return text.strip()
+    
+    def _mock_chat_with_functions(
+        self,
+        message: str,
+        user_name: Optional[str],
+        filters: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Mock chat with functions for testing."""
+        from src.services.sql_agent import handle_function_call
+        import json
+        
+        greeting = f"Hi {user_name}! " if user_name else "Hello! "
+        function_calls_made = []
+        
+        # Build filter context for mock responses
+        filter_context = ""
+        if filters:
+            filter_parts = []
+            if filters.get("client_ref"):
+                filter_parts.append(f"client {filters['client_ref']}")
+            if filters.get("start_date") and filters.get("end_date"):
+                filter_parts.append(f"{filters['start_date']} to {filters['end_date']}")
+            elif filters.get("start_date"):
+                filter_parts.append(f"from {filters['start_date']}")
+            if filter_parts:
+                filter_context = f" (filtered by {', '.join(filter_parts)})"
+        
+        # Check for call search patterns
+        import re
+        call_search = re.search(r'(?:call|recording).*?(\d{5,})', message, re.IGNORECASE)
+        if call_search:
+            ref = call_search.group(1)
+            result = handle_function_call("search_calls", {"reference": ref, "reference_type": "any"})
+            function_calls_made.append({
+                "function": "search_calls",
+                "arguments": {"reference": ref},
+                "result_rows": result.get("row_count", 0),
+                "success": result.get("success", False),
+            })
+            
+            if result.get("success") and result.get("data"):
+                call_data = result["data"][0]
+                return {
+                    "response": f"""{greeting}I found that call! Here are the details:
+
+**Call ID:** {call_data.get('apex_id', 'N/A')}
+**Date:** {call_data.get('call_date', 'N/A')}
+**Agent:** {call_data.get('agent_name', 'Unknown')}
+**Duration:** {call_data.get('duration_seconds', 0) // 60} minutes
+**Quality Score:** {call_data.get('quality_score', 'N/A')}%
+**Sentiment:** {call_data.get('sentiment_label', 'N/A')}
+
+**Summary:** {call_data.get('summary', 'No summary available.')}
+
+Would you like me to show you the full transcript or any other details?""",
+                    "tokens_used": 100,
+                    "processing_time": 0.5,
+                    "model": "mock",
+                    "function_calls": function_calls_made,
+                }
+            else:
+                return {
+                    "response": f"{greeting}I couldn't find a call with reference '{ref}'. Please check the reference number and try again.",
+                    "tokens_used": 20,
+                    "processing_time": 0.2,
+                    "model": "mock",
+                    "function_calls": function_calls_made,
+                }
+        
+        # Check for agent performance queries
+        if "worst" in message.lower() and "agent" in message.lower():
+            result = handle_function_call("execute_sql_query", {
+                "query": """SELECT agent_name, AVG(quality_score) as avg_quality, COUNT(*) as call_count
+                           FROM ai_call_recordings r
+                           JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+                           WHERE call_date >= DATE_SUB(NOW(), INTERVAL 30 DAY)
+                           GROUP BY agent_name
+                           ORDER BY avg_quality ASC
+                           LIMIT 5""",
+                "purpose": "Find worst performing agents"
+            })
+            function_calls_made.append({
+                "function": "execute_sql_query",
+                "arguments": {"query": "...", "purpose": "Find worst performing agents"},
+                "result_rows": result.get("row_count", 0),
+                "success": result.get("success", False),
+            })
+            
+            if result.get("success") and result.get("data"):
+                agents = result["data"]
+                agent_list = "\n".join([
+                    f"{i+1}. **{a.get('agent_name', 'Unknown')}** - {a.get('avg_quality', 0):.1f}% quality ({a.get('call_count', 0)} calls)"
+                    for i, a in enumerate(agents)
+                ])
+                return {
+                    "response": f"""{greeting}Here are the 5 lowest performing agents in the last 30 days:
+
+{agent_list}
+
+Would you like me to analyse specific calls from any of these agents?""",
+                    "tokens_used": 100,
+                    "processing_time": 0.5,
+                    "model": "mock",
+                    "function_calls": function_calls_made,
+                }
+        
+        # Default response
+        return {
+            "response": f"""{greeting}I can help you analyse call data. Here are some things I can do:
+
+- **Find a specific call:** "Find call 12345" or "Show me call with order reference 67890"
+- **Agent performance:** "Who are the worst performing agents?" or "Show me John's calls"
+- **Call statistics:** "How many calls were processed last week?"
+- **Transcript search:** "What did the customer say about billing in call 12345?"
+
+What would you like to know?""",
+            "tokens_used": 50,
+            "processing_time": 0.1,
+            "model": "mock",
+            "function_calls": [],
+        }
     
     def get_status(self) -> Dict[str, Any]:
         """Get service status for health checks."""

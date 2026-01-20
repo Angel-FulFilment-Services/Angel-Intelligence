@@ -8,6 +8,14 @@ from .pii_detector import PIIDetector
 from .voice_fingerprint import VoiceFingerprintService
 from .interactive import InteractiveService, get_interactive_service
 from .interactive_proxy import InteractiveServiceProxy, get_interactive_proxy
+from .sql_agent import (
+    execute_safe_query,
+    validate_sql,
+    handle_function_call,
+    get_sql_agent_system_prompt,
+    DATABASE_SCHEMA,
+    SQL_AGENT_FUNCTIONS,
+)
 
 def get_analysis_service():
     """Lazy import for AnalysisService."""
@@ -24,4 +32,10 @@ __all__ = [
     "get_interactive_service",
     "InteractiveServiceProxy",
     "get_interactive_proxy",
+    "execute_safe_query",
+    "validate_sql",
+    "handle_function_call",
+    "get_sql_agent_system_prompt",
+    "DATABASE_SCHEMA",
+    "SQL_AGENT_FUNCTIONS",
 ]
