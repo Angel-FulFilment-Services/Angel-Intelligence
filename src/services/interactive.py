@@ -262,31 +262,114 @@ Key guidelines:
         filter_desc = ""
         if filters:
             filter_parts = []
-            if filters.get("client_ref"):
+            if filters.get("client_name"):
+                filter_parts.append(f"client {filters['client_name']}")
+            elif filters.get("client_ref"):
                 filter_parts.append(f"client {filters['client_ref']}")
             if filters.get("campaign"):
                 filter_parts.append(f"campaign '{filters['campaign']}'")
             if filters.get("start_date") and filters.get("end_date"):
-                filter_parts.append(f"period {filters['start_date']} to {filters['end_date']}")
+                # Format dates as UK format
+                try:
+                    from datetime import datetime
+                    start = datetime.strptime(filters['start_date'], '%Y-%m-%d').strftime('%d/%m/%Y')
+                    end = datetime.strptime(filters['end_date'], '%Y-%m-%d').strftime('%d/%m/%Y')
+                    filter_parts.append(f"period {start} to {end}")
+                except:
+                    filter_parts.append(f"period {filters['start_date']} to {filters['end_date']}")
             if filter_parts:
                 filter_desc = f" for {', '.join(filter_parts)}"
         
-        prompt = f"""Generate a {summary_type} summary{filter_desc} based on the following call quality data:
+        # Build rich data section
+        data_sections = []
+        
+        # Core metrics
+        data_sections.append(f"""## Core Metrics
+- **Total Calls:** {data.get('call_count', 0):,}
+- **Average Quality Score:** {data.get('avg_quality_score', 0):.1f}%
+- **Average Sentiment Score:** {data.get('avg_sentiment_score', 0):.1f}/10
+- **Total Call Duration:** {data.get('total_duration_seconds', 0) // 60:,} minutes""")
+        
+        # Quality distribution
+        if data.get('quality_distribution'):
+            qd = data['quality_distribution']
+            data_sections.append(f"""## Quality Distribution
+- Excellent (80%+): {qd.get('excellent_80_plus', 0)} calls
+- Good (60-79%): {qd.get('good_60_79', 0)} calls
+- Average (40-59%): {qd.get('average_40_59', 0)} calls
+- Poor (<40%): {qd.get('poor_below_40', 0)} calls""")
+        
+        # Top agents
+        if data.get('top_agents'):
+            top_list = "\n".join([f"- {a['name']}: {a['quality']:.1f}% quality ({a['calls']} calls)" 
+                                   for a in data['top_agents'][:5]])
+            data_sections.append(f"""## Top Performing Agents
+{top_list}""")
+        
+        # Agents needing coaching
+        if data.get('agents_needing_coaching'):
+            bottom_list = "\n".join([f"- {a['name']}: {a['quality']:.1f}% quality ({a['calls']} calls)" 
+                                      for a in data['agents_needing_coaching'][:5]])
+            data_sections.append(f"""## Agents Needing Coaching
+{bottom_list}""")
+        
+        # Common improvement areas
+        if data.get('common_improvement_areas'):
+            areas_list = "\n".join([f"- {a['area']}: {a['count']} occurrences" 
+                                     for a in data['common_improvement_areas'][:7]])
+            data_sections.append(f"""## Common Improvement Areas
+{areas_list}""")
+        
+        # Compliance issues
+        if data.get('calls_with_compliance_issues', 0) > 0:
+            data_sections.append(f"""## Compliance
+- Calls with compliance issues: {data['calls_with_compliance_issues']}""")
+        
+        # Top topics
+        if data.get('top_topics'):
+            topics_list = "\n".join([f"- {t['topic']}: {t['count']} calls" 
+                                      for t in data['top_topics'][:7]])
+            data_sections.append(f"""## Top Call Topics
+{topics_list}""")
+        
+        data_text = "\n\n".join(data_sections)
+        
+        prompt = f"""Generate a comprehensive {summary_type} call quality summary{filter_desc}.
 
-Call Count: {data.get('call_count', 0)}
-Average Quality Score: {data.get('avg_quality_score', 0):.1f}%
-Average Sentiment Score: {data.get('avg_sentiment_score', 0):.1f}
-Total Call Duration: {data.get('total_duration_seconds', 0) // 60} minutes
+{data_text}
 
-Provide in Markdown format:
-1. A brief executive summary (2-3 sentences with **bold** metrics)
-2. ### Key Insights - 3-5 bullet points with specific data
-3. ### Recommendations - 2-3 actionable bullet points
+Based on this data, provide a detailed summary in Markdown format:
 
-Use British English. Be specific and data-driven. Format numbers clearly."""
+1. **Executive Summary** (3-4 sentences highlighting the most important findings with **bold** key metrics)
+
+2. ### Performance Overview
+   - Comment on overall quality and sentiment trends
+   - Highlight the quality distribution (what % of calls are excellent vs poor)
+
+3. ### Top Performers
+   - Recognise the best performing agents by name
+   - Note what makes them stand out
+
+4. ### Coaching Priorities  
+   - Identify agents who need additional support
+   - Connect to the common improvement areas
+   - Be constructive and actionable
+
+5. ### Key Improvement Areas
+   - Analyse the most common issues across the team
+   - Provide specific, actionable recommendations for each
+
+6. ### Call Topics & Compliance
+   - Summarise what calls were about
+   - Flag any compliance concerns
+
+7. ### Recommendations
+   - 3-5 specific, prioritised action items for management
+
+Use British English. Be specific and data-driven. Reference actual numbers and agent names from the data. Format with proper Markdown headers and bullet points."""
 
         messages = [
-            {"role": "system", "content": "You are an AI analyst generating call quality reports for a charity fundraising company."},
+            {"role": "system", "content": "You are an expert call quality analyst generating detailed performance reports for a charity fundraising company. Your summaries help managers understand team performance and prioritise coaching efforts. Always use the full client name, never shorthand codes."},
             {"role": "user", "content": prompt}
         ]
         
@@ -300,7 +383,7 @@ Use British English. Be specific and data-driven. Format numbers clearly."""
             with torch.no_grad():
                 outputs = self._model.generate(
                     inputs,
-                    max_new_tokens=1024,
+                    max_new_tokens=2048,  # Increased for comprehensive summaries
                     do_sample=True,
                     temperature=0.7,
                     top_p=0.9,

@@ -820,7 +820,7 @@ async def generate_summary(request: SummaryGenerateRequest):
             message="No call data found for the specified period"
         )
     
-    # Prepare data for summary generation
+    # Prepare basic metrics for summary generation
     data = {
         "call_count": metrics_row["call_count"],
         "avg_quality_score": float(metrics_row["avg_quality"] or 0),
@@ -828,6 +828,157 @@ async def generate_summary(request: SummaryGenerateRequest):
         "total_duration_seconds": int(metrics_row["total_duration"] or 0),
     }
     
+    # Fetch richer data for better AI insights
+    
+    # Top performing agents
+    top_agents_query = """
+        SELECT r.agent_name, r.halo_id, COUNT(*) as call_count,
+               AVG(a.quality_score) as avg_quality, AVG(a.sentiment_score) as avg_sentiment
+        FROM ai_call_recordings r
+        JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+        WHERE r.call_date >= %s AND r.call_date <= %s AND r.agent_name IS NOT NULL
+    """
+    top_params = [request.start_date, request.end_date]
+    if request.client_ref:
+        top_agents_query += " AND r.client_ref = %s"
+        top_params.append(request.client_ref)
+    if request.campaign:
+        top_agents_query += " AND r.campaign = %s"
+        top_params.append(request.campaign)
+    top_agents_query += " GROUP BY r.agent_name, r.halo_id HAVING call_count >= 3 ORDER BY avg_quality DESC LIMIT 5"
+    
+    top_agents = db.fetch_all(top_agents_query, tuple(top_params))
+    data["top_agents"] = [
+        {"name": row["agent_name"], "calls": row["call_count"], 
+         "quality": float(row["avg_quality"] or 0), "sentiment": float(row["avg_sentiment"] or 0)}
+        for row in top_agents
+    ]
+    
+    # Bottom performing agents (needing coaching)
+    bottom_agents_query = top_agents_query.replace("ORDER BY avg_quality DESC", "ORDER BY avg_quality ASC")
+    bottom_agents = db.fetch_all(bottom_agents_query, tuple(top_params))
+    data["agents_needing_coaching"] = [
+        {"name": row["agent_name"], "calls": row["call_count"],
+         "quality": float(row["avg_quality"] or 0), "sentiment": float(row["avg_sentiment"] or 0)}
+        for row in bottom_agents
+    ]
+    
+    # Quality distribution
+    quality_dist_query = """
+        SELECT 
+            SUM(CASE WHEN a.quality_score >= 80 THEN 1 ELSE 0 END) as excellent,
+            SUM(CASE WHEN a.quality_score >= 60 AND a.quality_score < 80 THEN 1 ELSE 0 END) as good,
+            SUM(CASE WHEN a.quality_score >= 40 AND a.quality_score < 60 THEN 1 ELSE 0 END) as average,
+            SUM(CASE WHEN a.quality_score < 40 THEN 1 ELSE 0 END) as poor
+        FROM ai_call_recordings r
+        JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+        WHERE r.call_date >= %s AND r.call_date <= %s
+    """
+    qual_params = [request.start_date, request.end_date]
+    if request.client_ref:
+        quality_dist_query += " AND r.client_ref = %s"
+        qual_params.append(request.client_ref)
+    if request.campaign:
+        quality_dist_query += " AND r.campaign = %s"
+        qual_params.append(request.campaign)
+    
+    qual_dist = db.fetch_one(quality_dist_query, tuple(qual_params))
+    if qual_dist:
+        data["quality_distribution"] = {
+            "excellent_80_plus": int(qual_dist["excellent"] or 0),
+            "good_60_79": int(qual_dist["good"] or 0),
+            "average_40_59": int(qual_dist["average"] or 0),
+            "poor_below_40": int(qual_dist["poor"] or 0),
+        }
+    
+    # Common improvement areas (from the new improvement_areas field)
+    improvement_query = """
+        SELECT a.improvement_areas
+        FROM ai_call_recordings r
+        JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+        WHERE r.call_date >= %s AND r.call_date <= %s
+          AND a.improvement_areas IS NOT NULL AND a.improvement_areas != '[]'
+    """
+    imp_params = [request.start_date, request.end_date]
+    if request.client_ref:
+        improvement_query += " AND r.client_ref = %s"
+        imp_params.append(request.client_ref)
+    if request.campaign:
+        improvement_query += " AND r.campaign = %s"
+        imp_params.append(request.campaign)
+    improvement_query += " LIMIT 100"
+    
+    improvement_rows = db.fetch_all(improvement_query, tuple(imp_params))
+    area_counts = {}
+    for row in improvement_rows:
+        try:
+            import json
+            areas = json.loads(row["improvement_areas"]) if isinstance(row["improvement_areas"], str) else row["improvement_areas"]
+            if isinstance(areas, list):
+                for area in areas:
+                    area_name = area.get("area") if isinstance(area, dict) else str(area)
+                    if area_name:
+                        area_counts[area_name] = area_counts.get(area_name, 0) + 1
+        except:
+            pass
+    
+    # Sort by frequency and take top 10
+    sorted_areas = sorted(area_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    data["common_improvement_areas"] = [{"area": area, "count": count} for area, count in sorted_areas]
+    
+    # Compliance issue count
+    compliance_query = """
+        SELECT COUNT(*) as issue_count
+        FROM ai_call_recordings r
+        JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+        WHERE r.call_date >= %s AND r.call_date <= %s
+          AND a.compliance_flags IS NOT NULL AND a.compliance_flags != '[]'
+    """
+    comp_params = [request.start_date, request.end_date]
+    if request.client_ref:
+        compliance_query += " AND r.client_ref = %s"
+        comp_params.append(request.client_ref)
+    if request.campaign:
+        compliance_query += " AND r.campaign = %s"
+        comp_params.append(request.campaign)
+    
+    compliance_row = db.fetch_one(compliance_query, tuple(comp_params))
+    data["calls_with_compliance_issues"] = int(compliance_row["issue_count"] or 0) if compliance_row else 0
+    
+    # Topic breakdown
+    topic_query = """
+        SELECT a.key_topics
+        FROM ai_call_recordings r
+        JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+        WHERE r.call_date >= %s AND r.call_date <= %s
+          AND a.key_topics IS NOT NULL AND a.key_topics != '[]'
+    """
+    topic_params = [request.start_date, request.end_date]
+    if request.client_ref:
+        topic_query += " AND r.client_ref = %s"
+        topic_params.append(request.client_ref)
+    if request.campaign:
+        topic_query += " AND r.campaign = %s"
+        topic_params.append(request.campaign)
+    topic_query += " LIMIT 100"
+    
+    topic_rows = db.fetch_all(topic_query, tuple(topic_params))
+    topic_counts = {}
+    for row in topic_rows:
+        try:
+            import json
+            topics = json.loads(row["key_topics"]) if isinstance(row["key_topics"], str) else row["key_topics"]
+            if isinstance(topics, list):
+                for topic in topics:
+                    topic_name = topic.get("name") if isinstance(topic, dict) else str(topic)
+                    if topic_name:
+                        topic_counts[topic_name] = topic_counts.get(topic_name, 0) + 1
+        except:
+            pass
+    
+    sorted_topics = sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+    data["top_topics"] = [{"topic": topic, "count": count} for topic, count in sorted_topics]
+
     # Use interactive service for AI summary
     # In API mode, proxy to interactive workers; otherwise run locally
     settings = get_settings()
