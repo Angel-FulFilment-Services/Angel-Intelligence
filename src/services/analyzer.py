@@ -475,8 +475,16 @@ Respond with ONLY valid JSON:
     "agent_actions_performed": [{{"action": "action from config", "timestamp_start": 0.0, "quality": 1-5}}],
     "performance_scores": {{"criterion": 1-10}},
     "action_items": [{{"description": "action needed", "priority": "high/medium/low"}}],
-    "compliance_flags": [{{"type": "issue_type", "issue": "description", "severity": "low/medium/high/critical"}}]
-}}"""
+    "compliance_flags": [{{"type": "issue_type", "issue": "description", "severity": "low/medium/high/critical"}}],
+    "improvement_areas": [{{"area": "specific skill or behaviour needing improvement", "description": "detailed explanation of what went wrong and how to improve", "priority": "high/medium/low", "examples": ["quote from transcript showing the issue"]}}]
+}}
+
+IMPROVEMENT AREAS GUIDANCE:
+- Identify specific coaching opportunities for the agent
+- Include issues like: unclear speech, rudeness, poor objection handling, talking over the caller, not listening, missing key information, weak closing, lack of empathy, rushing the call, not following script, poor product knowledge
+- Be specific and actionable - describe exactly what the agent did wrong and how to improve
+- Include examples/quotes from the transcript where possible
+- Compliance issues should also appear here as areas for improvement, not just in compliance_flags"""
     
     def _generate_text_response(self, prompt: str) -> str:
         """Generate text response from model."""

@@ -108,6 +108,7 @@ AI analysis results for each call. Linked to ai_call_recordings via ai_call_reco
 | performance_scores | JSON | Breakdown of agent performance metrics |
 | action_items | JSON | Follow-up actions identified |
 | compliance_flags | JSON | Any compliance issues detected |
+| improvement_areas | JSON | Key areas for agent improvement/coaching: [{"area": "Objection Handling", "description": "Agent struggled when donor raised concerns", "priority": "high", "examples": ["quote"]}] |
 | speaker_metrics | JSON | Talk time, interruptions, etc. per speaker |
 | audio_analysis | JSON | Audio quality observations |
 | model_used | VARCHAR(100) | Analysis model name |

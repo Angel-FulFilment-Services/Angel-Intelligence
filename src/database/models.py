@@ -276,6 +276,7 @@ class CallAnalysis:
     quality_score: float = 50.0
     action_items: List[Dict[str, Any]] = field(default_factory=list)
     compliance_flags: List[Dict[str, Any]] = field(default_factory=list)
+    improvement_areas: List[Dict[str, Any]] = field(default_factory=list)  # Key areas for agent improvement/coaching
     speaker_metrics: Dict[str, Any] = field(default_factory=dict)
     audio_analysis: Optional[Dict[str, Any]] = None
     model_used: str = ""
@@ -296,6 +297,7 @@ class CallAnalysis:
         performance_scores_json = json.dumps(self.performance_scores)
         action_items_json = json.dumps(self.action_items)
         compliance_flags_json = json.dumps(self.compliance_flags)
+        improvement_areas_json = json.dumps(self.improvement_areas)
         speaker_metrics_json = json.dumps(self.speaker_metrics)
         audio_analysis_json = json.dumps(self.audio_analysis) if self.audio_analysis else None
         
@@ -303,9 +305,9 @@ class CallAnalysis:
             INSERT INTO ai_call_analysis
             (ai_call_recording_id, summary, sentiment_score, sentiment_label,
              key_topics, agent_actions_performed, performance_scores, quality_score,
-             action_items, compliance_flags, speaker_metrics, audio_analysis,
+             action_items, compliance_flags, improvement_areas, speaker_metrics, audio_analysis,
              model_used, model_version, processing_time_seconds, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
             self.ai_call_recording_id,
             self.summary,
@@ -317,6 +319,7 @@ class CallAnalysis:
             self.quality_score,
             action_items_json,
             compliance_flags_json,
+            improvement_areas_json,
             speaker_metrics_json,
             audio_analysis_json,
             self.model_used,
