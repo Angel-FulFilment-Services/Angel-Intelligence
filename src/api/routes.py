@@ -110,12 +110,21 @@ class ConfigResponse(BaseModel):
     performance_rubric: List[str]
 
 
+class ChatUser(BaseModel):
+    """User information for personalized chat responses."""
+    id: int
+    name: str
+    email: Optional[str] = None
+
+
 class ChatRequest(BaseModel):
     """Chat conversation request."""
     message: str
     recording_id: Optional[int] = None
     conversation_id: Optional[str] = None
-    # Fields for new conversation creation (when conversation_id is null)
+    # User object for personalization and conversation creation
+    user: Optional[ChatUser] = None
+    # Legacy field - use user.id instead
     user_id: Optional[int] = None
     feature: Optional[str] = "general"
     filters: Optional[dict] = None
@@ -405,6 +414,7 @@ async def chat(request: ChatRequest):
     - Existing conversation: Appends messages to existing conversation
     
     If AI processing fails, the transaction rolls back - no orphaned records.
+    Supports user personalization when user object is provided.
     """
     import time
     from src.services.interactive import get_interactive_service
@@ -417,6 +427,10 @@ async def chat(request: ChatRequest):
     conversation_id = None
     is_new_conversation = False
     assistant_message_id = None
+    
+    # Extract user info for personalization
+    user_id = request.user.id if request.user else request.user_id
+    user_name = request.user.name if request.user else None
     
     try:
         # Start transaction for atomic operations
@@ -432,22 +446,22 @@ async def chat(request: ChatRequest):
                 raise HTTPException(status_code=404, detail="Conversation not found")
         else:
             # New conversation - create atomically with messages
-            if not request.user_id:
+            if not user_id:
                 db.execute("ROLLBACK")
                 raise HTTPException(
                     status_code=400, 
-                    detail="user_id is required when creating a new conversation"
+                    detail="user or user_id is required when creating a new conversation"
                 )
             
             is_new_conversation = True
             conversation = ChatConversation(
-                user_id=request.user_id,
+                user_id=user_id,
                 feature=request.feature or "general",
                 title="New Conversation",  # Pulse will update this later
                 filters=request.filters,
             )
             conversation_id = conversation.save()
-            logger.info(f"Created new conversation {conversation_id} for user {request.user_id}")
+            logger.info(f"Created new conversation {conversation_id} for user {user_id} ({user_name})")
         
         conv_time = time.time()
         logger.info(f"[TIMING] Conversation setup took {conv_time - request_start:.2f}s")
@@ -464,7 +478,12 @@ async def chat(request: ChatRequest):
         logger.info(f"[TIMING] User message save took {save_time - conv_time:.2f}s")
         
         # Build context if recording specified
-        context = None
+        context_parts = []
+        
+        # Add user context for personalization
+        if user_name:
+            context_parts.append(f"You are speaking with {user_name}. Address them by name to make responses personal and friendly.")
+        
         if request.recording_id:
             trans = db.fetch_one(
                 "SELECT full_transcript FROM ai_call_transcriptions WHERE ai_call_recording_id = %s",
@@ -475,15 +494,13 @@ async def chat(request: ChatRequest):
                 (request.recording_id,)
             )
             
-            context_parts = []
             if trans:
                 context_parts.append(f"Transcript: {trans['full_transcript'][:2000]}")
             if analysis:
                 context_parts.append(f"Summary: {analysis['summary']}")
                 context_parts.append(f"Sentiment: {analysis['sentiment_label']}, Quality: {analysis['quality_score']}")
-            
-            if context_parts:
-                context = "\n".join(context_parts)
+        
+        context = "\n".join(context_parts) if context_parts else None
         
         context_time = time.time()
         logger.info(f"[TIMING] Context build took {context_time - save_time:.2f}s")
@@ -1115,7 +1132,9 @@ class EnhancedChatRequest(BaseModel):
     """Enhanced chat request matching specification."""
     message: str
     conversation_id: Optional[int] = None
-    # Fields for new conversation creation (when conversation_id is null)
+    # User object for personalization and conversation creation
+    user: Optional[ChatUser] = None
+    # Legacy field - use user.id instead
     user_id: Optional[int] = None
     feature: str = "call_quality"
     filters: Optional[dict] = None
@@ -1147,6 +1166,7 @@ async def enhanced_chat(request: EnhancedChatRequest):
     - Existing conversation: Appends messages to existing conversation
     
     If AI processing fails, the transaction rolls back - no orphaned records.
+    Supports user personalization when user object is provided.
     """
     from src.database import ChatConversation, ChatMessage
     from src.services.interactive import get_interactive_service
@@ -1157,6 +1177,10 @@ async def enhanced_chat(request: EnhancedChatRequest):
     is_new_conversation = False
     assistant_message_id = None
     context_calls = 0
+    
+    # Extract user info for personalization
+    user_id = request.user.id if request.user else request.user_id
+    user_name = request.user.name if request.user else None
     
     try:
         # Start transaction for atomic operations
@@ -1171,22 +1195,22 @@ async def enhanced_chat(request: EnhancedChatRequest):
             conversation_id = conversation.id
         else:
             # New conversation - create atomically with messages
-            if not request.user_id:
+            if not user_id:
                 db.execute("ROLLBACK")
                 raise HTTPException(
                     status_code=400,
-                    detail="user_id is required when creating a new conversation"
+                    detail="user or user_id is required when creating a new conversation"
                 )
             
             is_new_conversation = True
             conversation = ChatConversation(
-                user_id=request.user_id,
+                user_id=user_id,
                 feature=request.feature,
                 filters=request.filters,
                 title="New Conversation",  # Pulse will update this later
             )
             conversation_id = conversation.save()
-            logger.info(f"Created new conversation {conversation_id} for user {request.user_id}")
+            logger.info(f"Created new conversation {conversation_id} for user {user_id} ({user_name})")
         
         # Save user message
         user_message = ChatMessage(
@@ -1198,6 +1222,10 @@ async def enhanced_chat(request: EnhancedChatRequest):
         
         # Build context from filtered data
         context_parts = []
+        
+        # Add user context for personalization
+        if user_name:
+            context_parts.append(f"You are speaking with {user_name}. Address them by name to make responses personal and friendly.")
         
         if request.filters:
             # Get aggregated metrics and recent calls
