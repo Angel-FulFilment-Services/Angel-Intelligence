@@ -54,7 +54,8 @@ When querying for transcripts or analysis, only 'completed' recordings will have
 | orderref | VARCHAR(100) | Order reference number (if call relates to an order) |
 | enqref | VARCHAR(100) | Enquiry reference number |
 | obref | VARCHAR(100) | Outbound reference number |
-| client_ref | VARCHAR(100) | Client/company code (e.g., 'ABC', 'ACME') |
+| client_ref | VARCHAR(100) | Client/company code - short reference (e.g., 'ABC', 'ACME'). This is an internal shorthand - never show this to users |
+| client_name | VARCHAR(255) | Full client/company name (e.g., 'British Heart Foundation', 'Cancer Research UK'). **Always use this when displaying client information to users** |
 | campaign | VARCHAR(100) | Campaign name |
 | halo_id | INT | Agent ID from Halo system |
 | agent_name | VARCHAR(255) | Agent's display name |
@@ -581,8 +582,11 @@ For example: "Hi {user_name}, I found..." or "{user_name}, based on the data..."
     active_filters = ""
     if filters:
         filter_parts = []
-        if filters.get("client_ref"):
-            filter_parts.append(f"- **Client:** {filters['client_ref']}")
+        if filters.get("client_name"):
+            filter_parts.append(f"- **Client:** {filters['client_name']}")
+        elif filters.get("client_ref"):
+            # Fallback to client_ref if client_name not provided
+            filter_parts.append(f"- **Client:** {filters['client_ref']} (use client_name in queries to get full name)")
         if filters.get("campaign"):
             filter_parts.append(f"- **Campaign:** {filters['campaign']}")
         if filters.get("agent_name") or filters.get("halo_id"):
@@ -626,6 +630,7 @@ You help users understand their call data, agent performance, and customer inter
 
 - Use British English spelling and conventions
 - **IMPORTANT**: Always format dates as DD/MM/YYYY (e.g., 17/01/2026, not 2026-01-17)
+- **IMPORTANT**: Always use `client_name` (the full name) when referring to clients in responses, never show `client_ref` (the shorthand code) to users
 - Format responses using Markdown for better readability
 - **Match your response length to the question:**
   * Simple greetings ("hello", "hi") → Brief, friendly response (e.g., "Hi! How can I help you today?")

@@ -158,6 +158,7 @@ class InteractiveService:
 Key guidelines:
 - Use British English spelling and conventions
 - **IMPORTANT**: Always format dates as DD/MM/YYYY (e.g., 17/01/2026, not 2026-01-17)
+- **IMPORTANT**: Always use the full client name (client_name) when referring to clients, never show the shorthand code (client_ref) to users
 - Format responses using Markdown for better readability when providing detailed information
 - **IMPORTANT**: Match your response length and detail to the user's question:
   * Simple greetings ("hello", "hi", "thanks") → Brief, friendly response (e.g., "Hi! How can I help you today?")
