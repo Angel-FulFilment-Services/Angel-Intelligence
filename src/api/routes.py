@@ -6,6 +6,7 @@ Endpoints require Bearer token authentication.
 """
 
 import logging
+import os
 from datetime import datetime
 from typing import Optional, List
 
@@ -430,7 +431,9 @@ async def chat(request: ChatRequest):
     
     # Extract user info for personalization
     user_id = request.user.id if request.user else request.user_id
-    user_name = request.user.name if request.user else None
+    user_full_name = request.user.name if request.user else None
+    # Use only first name for privacy - never use full names in responses
+    user_name = user_full_name.split()[0] if user_full_name else None
     
     try:
         # Start transaction for atomic operations
@@ -482,7 +485,7 @@ async def chat(request: ChatRequest):
         
         # Add user context for personalization
         if user_name:
-            context_parts.append(f"You are speaking with {user_name}. Address them by name to make responses personal and friendly.")
+            context_parts.append(f"You are speaking with {user_name}. Address them by their first name only to keep responses personal and friendly. Never use full names.")
         
         if request.recording_id:
             trans = db.fetch_one(
@@ -533,12 +536,17 @@ async def chat(request: ChatRequest):
             error_msg = result.get("error_message") or result.get("response", "AI service error")
             logger.error(f"Chat error: {error_type} - {error_msg}")
             
+            # Return the response even if there was an error - it may contain useful feedback
+            response_text = result.get("response", "")
+            if not response_text:
+                response_text = "I'm having trouble answering that question. Please try rephrasing it or ask something more specific."
+            
             return ChatResponse(
-                success=False,
-                response="",
+                success=True,  # Changed to True so frontend shows the message
+                response=response_text,
                 conversation_id=str(conversation_id) if conversation_id and not is_new_conversation else "",
-                error=error_msg,
-                error_type=error_type,
+                error=None,
+                error_type=None,
             )
         
         ai_time = time.time()
@@ -668,6 +676,213 @@ async def get_failed_recordings(
         "count": len(rows),
         "recordings": rows
     }
+
+
+# =============================================================================
+# Transcription Only (for Dojo Training)
+# =============================================================================
+
+class TranscribeRequest(BaseModel):
+    """Request to transcribe a call without full analysis."""
+    apex_id: str
+    call_date: Optional[str] = None  # YYYY-MM-DD format, used for archive lookup
+
+
+class TranscribeSegment(BaseModel):
+    """A transcription segment with speaker and timing."""
+    start: float
+    end: float
+    text: str
+    speaker: str
+
+
+class TranscribeResponse(BaseModel):
+    """Response from transcription request."""
+    success: bool
+    full_transcript: Optional[str] = None
+    segments: Optional[List[TranscribeSegment]] = None
+    language: Optional[str] = None
+    confidence_score: Optional[float] = None
+    message: Optional[str] = None
+
+
+@router.post(
+    "/api/transcribe",
+    response_model=TranscribeResponse,
+    dependencies=[Depends(verify_token)]
+)
+async def transcribe_call(request: TranscribeRequest):
+    """
+    Transcribe a call without full analysis.
+    
+    Used by Dojo training feature when users need to label unanalysed calls.
+    - Fetches audio for the given apex_id
+    - Runs speech-to-text with speaker diarization
+    - Stores transcript in database for later reuse
+    - Does NOT run sentiment/quality analysis
+    
+    If transcription already exists for this apex_id, returns cached result.
+    """
+    from src.services import TranscriptionService, AudioDownloader
+    from src.database import CallTranscription, get_db_connection
+    
+    db = get_db_connection()
+    apex_id = request.apex_id
+    
+    try:
+        # Check if we already have a transcription for this apex_id
+        existing = CallTranscription.get_by_apex_id(apex_id)
+        if existing:
+            logger.info(f"Returning cached transcription for apex_id {apex_id}")
+            
+            # Map speaker labels for response (SPEAKER_00 -> agent, SPEAKER_01 -> customer)
+            segments = []
+            for seg in existing.segments:
+                speaker = seg.get("speaker", "SPEAKER_00")
+                # Simple mapping: first speaker is agent, second is customer
+                if speaker in ["SPEAKER_00", "agent"]:
+                    speaker_label = "agent"
+                else:
+                    speaker_label = "customer"
+                    
+                segments.append(TranscribeSegment(
+                    start=seg.get("start", 0.0),
+                    end=seg.get("end", 0.0),
+                    text=seg.get("text", ""),
+                    speaker=speaker_label
+                ))
+            
+            return TranscribeResponse(
+                success=True,
+                full_transcript=existing.full_transcript,
+                segments=segments,
+                language=existing.language_detected,
+                confidence_score=existing.confidence_score
+            )
+        
+        # Need to transcribe - first find call date for audio download
+        # Check if there's a recording record (may not exist for unanalysed calls)
+        recording_row = db.fetch_one(
+            "SELECT call_date, r2_path, r2_bucket FROM ai_call_recordings WHERE apex_id = %s",
+            (apex_id,)
+        )
+        
+        # Determine call_date from: 1) request, 2) database, 3) apex_id timestamp, 4) fallback to now
+        from datetime import datetime
+        call_date = None
+        r2_path = None
+        r2_bucket = None
+        
+        # 1. Use call_date from request if provided
+        if request.call_date:
+            try:
+                call_date = datetime.strptime(request.call_date, "%Y-%m-%d")
+            except ValueError:
+                logger.warning(f"Invalid call_date format: {request.call_date}, expected YYYY-MM-DD")
+        
+        # 2. Use database values if available
+        if recording_row:
+            if not call_date:
+                call_date = recording_row.get("call_date")
+            r2_path = recording_row.get("r2_path")
+            r2_bucket = recording_row.get("r2_bucket")
+        
+        # 3. Parse timestamp from apex_id
+        if not call_date:
+            try:
+                timestamp = float(apex_id.split('.')[0])
+                call_date = datetime.fromtimestamp(timestamp)
+            except (ValueError, IndexError):
+                pass
+        
+        # 4. Fallback to now (unlikely to find file, but won't crash)
+        if not call_date:
+            call_date = datetime.now()
+            logger.warning(f"Could not determine call_date for apex_id {apex_id}, using current date")
+        
+        # Download audio
+        downloader = AudioDownloader()
+        audio_path, is_local = downloader.download_recording(
+            apex_id=apex_id,
+            call_date=call_date,
+            r2_path=r2_path,
+            r2_bucket=r2_bucket
+        )
+        
+        try:
+            # Transcribe
+            transcriber = TranscriptionService()
+            result = transcriber.transcribe(
+                audio_path=audio_path,
+                language="en",
+                diarize=True
+            )
+            
+            if not result or not result.get("full_transcript"):
+                return TranscribeResponse(
+                    success=False,
+                    message="Transcription produced no results"
+                )
+            
+            # Save transcription to database (with apex_id, no recording_id yet)
+            transcription = CallTranscription(
+                apex_id=apex_id,
+                ai_call_recording_id=None,  # Will be linked later if full analysis runs
+                full_transcript=result["full_transcript"],
+                segments=result["segments"],
+                language_detected=result.get("language_detected", "en"),
+                confidence_score=result.get("confidence", 0.95),
+                model_used=result.get("model_used", "whisperx-medium"),
+                processing_time_seconds=int(result.get("processing_time", 0))
+            )
+            transcription.save()
+            
+            logger.info(f"Saved new transcription for apex_id {apex_id}")
+            
+            # Map speaker labels for response
+            segments = []
+            for seg in result["segments"]:
+                speaker = seg.get("speaker", "SPEAKER_00")
+                if speaker in ["SPEAKER_00", "agent"]:
+                    speaker_label = "agent"
+                else:
+                    speaker_label = "customer"
+                    
+                segments.append(TranscribeSegment(
+                    start=seg.get("start", 0.0),
+                    end=seg.get("end", 0.0),
+                    text=seg.get("text", ""),
+                    speaker=speaker_label
+                ))
+            
+            return TranscribeResponse(
+                success=True,
+                full_transcript=result["full_transcript"],
+                segments=segments,
+                language=result.get("language_detected", "en"),
+                confidence_score=result.get("confidence", 0.95)
+            )
+            
+        finally:
+            # Clean up audio file if not local
+            if not is_local and audio_path and os.path.exists(audio_path):
+                try:
+                    os.remove(audio_path)
+                except Exception:
+                    pass
+                    
+    except FileNotFoundError as e:
+        logger.warning(f"Audio not found for apex_id {apex_id}: {e}")
+        return TranscribeResponse(
+            success=False,
+            message=f"Audio file not found for apex_id {apex_id}"
+        )
+    except Exception as e:
+        logger.error(f"Transcription failed for apex_id {apex_id}: {e}", exc_info=True)
+        return TranscribeResponse(
+            success=False,
+            message=f"Transcription failed: {str(e)}"
+        )
 
 
 # =============================================================================

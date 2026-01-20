@@ -215,9 +215,13 @@ class CallTranscription:
     Model for ai_call_transcriptions table.
     
     Stores transcription results including PII-redacted versions.
+    
+    Note: apex_id allows storing transcription without a recording (Dojo training).
+    When full analysis runs, ai_call_recording_id is linked via link_to_recording().
     """
     id: Optional[int] = None
-    ai_call_recording_id: int = 0
+    ai_call_recording_id: Optional[int] = None  # Nullable - may not have recording yet
+    apex_id: Optional[str] = None               # Call identifier - can exist without recording
     full_transcript: str = ""
     segments: List[Dict[str, Any]] = field(default_factory=list)
     redacted_transcript: Optional[str] = None
@@ -238,12 +242,13 @@ class CallTranscription:
         
         self.id = db.insert("""
             INSERT INTO ai_call_transcriptions 
-            (ai_call_recording_id, full_transcript, segments, redacted_transcript,
+            (ai_call_recording_id, apex_id, full_transcript, segments, redacted_transcript,
              pii_detected, language_detected, confidence_score, model_used, 
              processing_time_seconds, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
             self.ai_call_recording_id,
+            self.apex_id,
             self.full_transcript,
             segments_json,
             self.redacted_transcript,
@@ -254,8 +259,74 @@ class CallTranscription:
             self.processing_time_seconds,
         ))
         
-        logger.info(f"Saved transcription {self.id} for recording {self.ai_call_recording_id}")
+        logger.info(f"Saved transcription {self.id} for apex_id {self.apex_id}")
         return self.id
+    
+    @classmethod
+    def from_row(cls, row: Dict[str, Any]) -> "CallTranscription":
+        """Create CallTranscription from database row."""
+        segments = row.get("segments")
+        if isinstance(segments, str):
+            segments = json.loads(segments)
+        
+        pii_detected = row.get("pii_detected")
+        if isinstance(pii_detected, str):
+            pii_detected = json.loads(pii_detected)
+        
+        return cls(
+            id=row.get("id"),
+            ai_call_recording_id=row.get("ai_call_recording_id"),
+            apex_id=row.get("apex_id"),
+            full_transcript=row.get("full_transcript", ""),
+            segments=segments or [],
+            redacted_transcript=row.get("redacted_transcript"),
+            pii_detected=pii_detected,
+            language_detected=row.get("language_detected", "en"),
+            confidence_score=float(row.get("confidence_score", 0.95)),
+            model_used=row.get("model_used", "whisperx-medium"),
+            processing_time_seconds=row.get("processing_time_seconds", 0),
+            created_at=row.get("created_at"),
+        )
+    
+    @staticmethod
+    def get_by_apex_id(apex_id: str) -> Optional["CallTranscription"]:
+        """Find existing transcription by apex_id."""
+        db = get_db_connection()
+        row = db.fetch_one(
+            "SELECT * FROM ai_call_transcriptions WHERE apex_id = %s",
+            (apex_id,)
+        )
+        return CallTranscription.from_row(row) if row else None
+    
+    @staticmethod
+    def get_by_recording_id(recording_id: int) -> Optional["CallTranscription"]:
+        """Find transcription by recording ID."""
+        db = get_db_connection()
+        row = db.fetch_one(
+            "SELECT * FROM ai_call_transcriptions WHERE ai_call_recording_id = %s",
+            (recording_id,)
+        )
+        return CallTranscription.from_row(row) if row else None
+    
+    def link_to_recording(self, recording_id: int) -> None:
+        """
+        Link this transcription to a recording.
+        
+        Called when full analysis runs on a call that was previously
+        transcribed-only via Dojo.
+        """
+        if not self.id:
+            raise ValueError("Cannot link unsaved transcription")
+        
+        db = get_db_connection()
+        db.execute("""
+            UPDATE ai_call_transcriptions 
+            SET ai_call_recording_id = %s
+            WHERE id = %s
+        """, (recording_id, self.id))
+        
+        self.ai_call_recording_id = recording_id
+        logger.info(f"Linked transcription {self.id} to recording {recording_id}")
 
 
 @dataclass

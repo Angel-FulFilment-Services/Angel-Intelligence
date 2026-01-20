@@ -41,6 +41,7 @@ requests
 transformers>=4.40.0
 accelerate
 huggingface-hub
+bitsandbytes>=0.43.0  # For int4/int8 quantization
 
 # ------------------------------------------------------------------------------
 # Audio LLM (Qwen2.5-Omni-7B)

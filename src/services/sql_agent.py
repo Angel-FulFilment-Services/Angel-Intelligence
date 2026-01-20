@@ -246,37 +246,39 @@ def validate_sql(query: str) -> Tuple[bool, str]:
     if not query or not query.strip():
         return False, "Empty query"
     
-    # Normalise query for checking
-    query_upper = query.upper().strip()
-    query_normalised = ' '.join(query_upper.split())
+    # Normalise query - remove extra whitespace and newlines
+    query_clean = ' '.join(query.split())
+    query_upper = query_clean.upper()
     
     # Must start with SELECT
-    if not query_normalised.startswith('SELECT'):
+    if not query_upper.startswith('SELECT'):
         return False, "Only SELECT queries are allowed"
     
     # Check for blocked keywords
     for keyword in BLOCKED_KEYWORDS:
         # Use word boundary matching to avoid false positives
         pattern = r'\b' + keyword + r'\b'
-        if re.search(pattern, query_normalised):
+        if re.search(pattern, query_upper):
             return False, f"Blocked keyword detected: {keyword}"
     
     # Check for comment injection attempts
-    if '--' in query or '/*' in query or '*/' in query:
+    if '--' in query_clean or '/*' in query_clean or '*/' in query_clean:
         return False, "SQL comments are not allowed"
     
-    # Check for semicolons (multiple statements)
-    if ';' in query.strip().rstrip(';'):
+    # Check for multiple statements (semicolons not at the end)
+    # Strip trailing semicolons, then check if any remain
+    query_no_trailing = query_clean.rstrip(';').strip()
+    if ';' in query_no_trailing:
         return False, "Multiple statements are not allowed"
     
     # Check for UNION-based injection attempts
-    if 'UNION' in query_normalised and 'SELECT' in query_normalised.split('UNION', 1)[1]:
+    if 'UNION' in query_upper and 'SELECT' in query_upper.split('UNION', 1)[1]:
         # Allow UNION only if it's a simple UNION ALL for legitimate queries
         pass  # Could add more checks here
     
     # Verify tables are in allowed list (basic check)
     # This is a simple check - a more robust parser would be better
-    from_match = re.search(r'\bFROM\s+(\w+)', query_normalised)
+    from_match = re.search(r'\bFROM\s+(\w+)', query_upper)
     if from_match:
         table_name = from_match.group(1).lower()
         if table_name not in ALLOWED_TABLES:
@@ -646,10 +648,12 @@ You help users understand their call data, agent performance, and customer inter
 - **ALWAYS respond to greetings and casual messages** - never ignore the user
 - **Remember previous messages** - if the user asks a follow-up question, use conversation context
 - **Don't repeat yourself** - if you already provided data, refer to it rather than querying again
-- **Ask clarifying questions** when the user's intent is unclear
-- **Never auto-select or filter data** unless the user specifically asks you to
-  * If you think filtering would help, ASK first: "Would you like me to filter by client/date/agent?"
-  * Don't assume the user wants specific filters applied unless they say so
+- **BE ACTION-ORIENTED**: When the user asks for data, FETCH IT IMMEDIATELY. Don't explain what you're going to do or ask permission to fetch data - just do it and present the results.
+- **ONLY ask for clarification** when the request is genuinely ambiguous and you cannot make a reasonable assumption. For example:
+  * "How many calls this month?" → Just fetch and answer, don't ask if they want to proceed
+  * "Show me the calls" (no context, no filters) → Ask which client/date range they want
+- **Never auto-select or filter data** unless the user specifically asks you to OR filters are already applied in their view
+  * If filters ARE applied, use them automatically without asking
 
 ## Stay On Topic
 
@@ -664,23 +668,55 @@ You have access to a database of call recordings, transcriptions, and AI analysi
 You can execute SQL queries to gather data needed to answer questions.
 
 When a user asks a question that requires data:
-1. Think about what data you need
-2. Use the execute_sql_query or search_calls function to get it
-3. Analyse the results
-4. Provide a helpful, personalized response
+1. Immediately execute the appropriate query - don't explain what you're going to do
+2. Analyse the results
+3. Provide a clear, concise answer with the data
+
+**NEVER say things like:**
+- "Let me check that for you..."
+- "I'll need to query the database..."
+- "Would you like me to fetch this information?"
+- "To answer this, I'll look at..."
+
+**INSTEAD, just fetch the data and respond with the answer directly.**
 
 ## Response Style
 
 - Be friendly and professional
+- Lead with the answer, not the methodology
 - Use specific numbers and data when available
 - Format responses nicely with markdown when appropriate
 - If you can't find data, say so clearly
-- Always explain what you found, not just raw numbers
 
 ## Available Functions
 
 - **execute_sql_query**: Run any SELECT query to get data
 - **search_calls**: Quick search for a specific call by reference number
+
+## How to Call Functions
+
+When you need data, output a function call in this EXACT format:
+
+FUNCTION_CALL: execute_sql_query {{"query": "SELECT ... FROM ... WHERE ...", "purpose": "description"}}
+
+**IMPORTANT:** Write SQL on a SINGLE LINE - do not use line breaks inside the query.
+
+### Examples
+
+**User asks:** "How many calls were analysed this month?"
+**You respond:**
+FUNCTION_CALL: execute_sql_query {{"query": "SELECT COUNT(*) as total_calls FROM ai_call_recordings WHERE processing_status = 'completed' AND call_date >= '2026-01-01' AND call_date <= '2026-01-31'", "purpose": "Count analysed calls this month"}}
+
+**User asks:** "What's the average quality score?"
+**You respond:**
+FUNCTION_CALL: execute_sql_query {{"query": "SELECT AVG(a.quality_score) as avg_quality FROM ai_call_recordings r JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id WHERE r.processing_status = 'completed'", "purpose": "Get average quality score"}}
+
+**User asks:** "Find call 12345"
+**You respond:**
+FUNCTION_CALL: search_calls {{"reference": "12345", "reference_type": "any"}}
+
+After you receive the FUNCTION_RESULT, use the actual data to answer the user's question with real numbers.
+**NEVER use placeholders like [total_calls] or [value]** - always use real data from query results.
 
 {DATABASE_SCHEMA}
 
@@ -690,5 +726,6 @@ When a user asks a question that requires data:
 2. If a query returns no results, tell the user
 3. For large result sets, summarise the key findings
 4. Protect user privacy - don't expose unnecessary PII
-5. If you're unsure what the user wants, ask for clarification
+5. Only ask for clarification when the request is genuinely ambiguous
+6. **Be direct** - answer the question, don't describe how you'll answer it
 """

@@ -47,6 +47,11 @@ soundfile>=0.12.1
 scipy>=1.7.0,<1.10.0
 
 # ------------------------------------------------------------------------------
+# Quantization (optional, for reduced VRAM usage)
+# ------------------------------------------------------------------------------
+bitsandbytes>=0.43.0  # For int4/int8 quantization
+
+# ------------------------------------------------------------------------------
 # Transformers and ML (Qwen2.5-Omni requires special transformers branch)
 # ------------------------------------------------------------------------------
 # Install Qwen Omni transformers branch (replaces standard transformers)

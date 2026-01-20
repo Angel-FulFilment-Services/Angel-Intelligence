@@ -111,32 +111,45 @@ class AudioDownloader:
                 except Exception as e:
                     logger.warning(f"R2 download failed: {e}")
             
+            # Log the call_date being used for archive lookup
+            logger.info(f"Looking for recording {apex_id}, call_date={call_date} (year={call_date.year}, month={call_date.month})")
+            
             # 3. Try live PBX
             if not gsm_path:
                 url = f"{self.pbx_live_url}{apex_id}.gsm"
+                logger.info(f"Trying live PBX: {url}")
                 gsm_path = self._download_from_url(url)
                 if gsm_path:
                     logger.info(f"Downloaded from live PBX: {url}")
+                else:
+                    logger.info(f"Not found at live PBX")
             
             # 4. Try archive (primary path)
             if not gsm_path:
                 year = call_date.year
                 month = str(call_date.month).zfill(2)
                 url = f"{self.pbx_archive_url}monitor-{year}/{month}/{apex_id}.gsm"
+                logger.info(f"Trying archive: {url}")
                 gsm_path = self._download_from_url(url)
                 if gsm_path:
                     logger.info(f"Downloaded from archive: {url}")
+                else:
+                    logger.info(f"Not found at archive")
             
             # 5. Try archive (alternative path with /monitor/ subdirectory)
             if not gsm_path:
                 year = call_date.year
                 month = str(call_date.month).zfill(2)
                 url = f"{self.pbx_archive_url}monitor-{year}/{month}/monitor/{apex_id}.gsm"
+                logger.info(f"Trying archive alt: {url}")
                 gsm_path = self._download_from_url(url)
                 if gsm_path:
                     logger.info(f"Downloaded from archive (alt): {url}")
+                else:
+                    logger.info(f"Not found at archive alt")
             
             if not gsm_path:
+                logger.error(f"Recording not found at any location for apex_id: {apex_id}")
                 raise FileNotFoundError(f"Could not find recording for apex_id: {apex_id}")
             
             # Convert GSM to WAV

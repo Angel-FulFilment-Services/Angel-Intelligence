@@ -13,6 +13,18 @@ from typing import Dict, Any, List, Optional
 
 import torch
 
+# PyTorch 2.6+ compatibility fix for pyannote/HuggingFace model loading
+# These models were saved with older PyTorch and contain omegaconf objects
+# that aren't in the new safe globals list. Since we trust HuggingFace models,
+# we patch torch.load to force weights_only=False for model loading.
+_original_torch_load = torch.load
+def _patched_torch_load(*args, **kwargs):
+    # Force weights_only=False for trusted model checkpoints
+    # Lightning/pyannote explicitly pass weights_only=True which we need to override
+    kwargs['weights_only'] = False
+    return _original_torch_load(*args, **kwargs)
+torch.load = _patched_torch_load
+
 from src.config import get_settings
 
 logger = logging.getLogger(__name__)
@@ -179,30 +191,34 @@ class TranscriptionService:
             return result
     
     def _apply_segmentation(self, result: Dict[str, Any]) -> Dict[str, Any]:
-        """Apply configured segmentation preference (word or sentence level)."""
+        """
+        Apply configured segmentation preference.
+        
+        word mode: Sentence segments with nested word-level timestamps (for karaoke)
+        sentence mode: Sentence segments only (no word breakdown)
+        """
+        segments = result.get("segments", [])
+        
         if self.segmentation == "word":
-            # Try to get word-level segments
-            if "word_segments" in result:
-                result["segments"] = result["word_segments"]
-                logger.debug(f"Using word-level segments: {len(result['segments'])} words")
-            elif "segments" in result and len(result["segments"]) > 0:
-                # Extract words from sentence segments
-                if "words" in result["segments"][0]:
-                    word_segments = []
-                    for segment in result["segments"]:
-                        if "words" in segment:
-                            for word in segment["words"]:
-                                word_segments.append({
-                                    "start": word.get("start", segment["start"]),
-                                    "end": word.get("end", segment["end"]),
-                                    "text": word.get("word", word.get("text", "")),
-                                    "score": word.get("score", segment.get("score", 0.95))
-                                })
-                    if word_segments:
-                        result["segments"] = word_segments
-                        logger.debug(f"Extracted {len(word_segments)} word-level segments")
+            # Keep sentence-level segments but ensure words are included
+            # This gives us: sentence -> words hierarchy for karaoke
+            for segment in segments:
+                # Words should already be present from alignment
+                # Just ensure they exist
+                if "words" not in segment:
+                    # No word-level data available, create a single "word" from the segment
+                    segment["words"] = [{
+                        "word": segment.get("text", ""),
+                        "start": segment.get("start", 0),
+                        "end": segment.get("end", 0),
+                        "score": segment.get("score", 0.95)
+                    }]
+            logger.debug(f"Using sentence segments with word timestamps: {len(segments)} segments")
         else:
-            logger.debug(f"Using sentence-level segments: {len(result.get('segments', []))} segments")
+            # Sentence mode - remove word-level data to reduce payload size
+            for segment in segments:
+                segment.pop("words", None)
+            logger.debug(f"Using sentence-level segments only: {len(segments)} segments")
         
         return result
     

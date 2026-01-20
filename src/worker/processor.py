@@ -99,28 +99,57 @@ class CallProcessor:
             # Load client-specific configuration
             client_config = self._load_client_config(recording.client_ref)
             
-            # Step 1: Download and convert audio
-            audio_path, is_local_file = self._download_audio(recording)
+            # Check if we have an existing transcription for this apex_id (from Dojo)
+            existing_transcription = CallTranscription.get_by_apex_id(recording.apex_id)
             
-            # Step 2: Transcribe
-            transcript_result = self._transcribe(audio_path)
-            
-            # Step 3: Identify speakers using voice fingerprinting
-            transcript_result = self._identify_speakers(
-                audio_path,
-                transcript_result,
-                recording.halo_id
-            )
-            
-            # Step 4: Detect and redact PII
-            pii_result = self._detect_pii(transcript_result)
-            
-            # Step 5: Save transcription
-            transcription_id = self._save_transcription(
-                recording, 
-                transcript_result, 
-                pii_result
-            )
+            if existing_transcription:
+                # Reuse existing transcription - link it to this recording
+                logger.info(f"Found existing transcription for apex_id {recording.apex_id}, reusing")
+                existing_transcription.link_to_recording(recording.id)
+                
+                # Use existing transcript data
+                transcript_result = {
+                    "full_transcript": existing_transcription.full_transcript,
+                    "segments": existing_transcription.segments,
+                    "language_detected": existing_transcription.language_detected,
+                    "confidence": existing_transcription.confidence_score,
+                    "model_used": existing_transcription.model_used,
+                }
+                pii_result = None
+                if existing_transcription.pii_detected:
+                    pii_result = {
+                        "pii_detected": existing_transcription.pii_detected,
+                        "pii_count": len(existing_transcription.pii_detected),
+                        "redacted_text": existing_transcription.redacted_transcript,
+                    }
+                transcription_id = existing_transcription.id
+                
+                # Still need to download audio for analysis
+                audio_path, is_local_file = self._download_audio(recording)
+            else:
+                # No existing transcription - full pipeline
+                # Step 1: Download and convert audio
+                audio_path, is_local_file = self._download_audio(recording)
+                
+                # Step 2: Transcribe
+                transcript_result = self._transcribe(audio_path)
+                
+                # Step 3: Identify speakers using voice fingerprinting
+                transcript_result = self._identify_speakers(
+                    audio_path,
+                    transcript_result,
+                    recording.halo_id
+                )
+                
+                # Step 4: Detect and redact PII
+                pii_result = self._detect_pii(transcript_result)
+                
+                # Step 5: Save transcription (with apex_id for future reuse)
+                transcription_id = self._save_transcription(
+                    recording, 
+                    transcript_result, 
+                    pii_result
+                )
             
             # Step 6: Analyse (with client config)
             analysis_result = self._analyse(
@@ -328,6 +357,7 @@ class CallProcessor:
         
         transcription = CallTranscription(
             ai_call_recording_id=recording.id,
+            apex_id=recording.apex_id,  # Store apex_id for future reuse
             full_transcript=full_transcript,
             segments=segments,
             redacted_transcript=redacted_transcript,

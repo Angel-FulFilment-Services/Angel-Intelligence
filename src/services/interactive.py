@@ -624,12 +624,42 @@ Is there a specific aspect of the calls you'd like me to analyse further?""",
                         if result.get("row_count", 0) > 10:
                             result_text += f"\n... ({result['row_count']} total rows)"
                     else:
-                        result_text = f"FUNCTION_ERROR: {result.get('error', 'Unknown error')}"
+                        error_msg = result.get('error', 'Unknown error')
+                        result_text = f"FUNCTION_ERROR: {error_msg}\n\n"
+                        
+                        # Provide schema hints based on the error
+                        if "Unknown column" in error_msg or "doesn't exist" in error_msg:
+                            result_text += """REMINDER - Here are the ACTUAL tables and columns available:
+
+**ai_call_recordings**: id, apex_id, orderref, enqref, obref, client_ref, client_name, campaign, halo_id, agent_name, creative, invoicing, call_date, direction, duration_seconds, processing_status, created_at
+
+**ai_call_transcriptions**: id, ai_call_recording_id, full_transcript, redacted_transcript, segments (JSON), pii_detected (JSON), pii_count, language_detected, confidence, model_used, processing_time_seconds, created_at
+
+**ai_call_analysis**: id, ai_call_recording_id, summary, sentiment_score, sentiment_label, quality_score, key_topics (JSON), agent_actions_performed (JSON), performance_scores (JSON), action_items (JSON), compliance_flags (JSON), improvement_areas (JSON), speaker_metrics (JSON), audio_analysis (JSON), model_used, processing_time_seconds, created_at
+
+**ai_monthly_summaries**: id, feature, summary_month, client_ref, campaign, agent_id, summary_data (JSON), call_count, avg_quality_score, avg_sentiment_score, created_at
+
+Please try again with a corrected query using ONLY these tables and columns."""
+                        else:
+                            result_text += "Please try a different query to answer the user's question."
                     
                     messages.append({
                         "role": "user",
                         "content": result_text
                     })
+                    
+                    # If we've had multiple failures, give up and return an error message
+                    failed_calls = sum(1 for fc in function_calls_made if not fc.get("success", False))
+                    if failed_calls >= 3:
+                        logger.warning(f"Too many failed function calls ({failed_calls}), giving up")
+                        return {
+                            "response": "I'm having trouble querying the database. The queries I tried didn't work - I may have used incorrect table or column names. Could you try rephrasing your question, or ask for something more specific like 'how many calls were completed this month?'",
+                            "tokens_used": len(response_tokens),
+                            "processing_time": time.time() - start_time,
+                            "model": self.settings.chat_model,
+                            "function_calls": function_calls_made,
+                            # Don't set "error" - this is a graceful failure with a message
+                        }
                     
                     # Continue the loop to let the model process the result
                     continue
@@ -637,6 +667,15 @@ Is there a specific aspect of the calls you'd like me to analyse further?""",
                     # No function call or max iterations reached - return the response
                     # Clean up any function call syntax that might have leaked through
                     clean_response = self._clean_function_syntax(response_text)
+                    
+                    # If the response is empty but we had function calls, provide a fallback
+                    if not clean_response.strip() and function_calls_made:
+                        # Check if any succeeded
+                        successful = [fc for fc in function_calls_made if fc.get("success", False)]
+                        if successful:
+                            clean_response = "I found some data but had trouble formatting a response. Please try asking your question again."
+                        else:
+                            clean_response = "I tried to query the database but encountered errors. Please try rephrasing your question."
                     
                     return {
                         "response": clean_response,
@@ -652,12 +691,12 @@ Is there a specific aspect of the calls you'd like me to analyse further?""",
         
         # Shouldn't reach here, but just in case
         return {
-            "response": "I apologize, but I had trouble processing your request. Please try again.",
+            "response": "I made several attempts to query the data but couldn't complete the request. Please try a simpler question.",
             "tokens_used": 0,
             "processing_time": time.time() - start_time,
             "model": self.settings.chat_model,
             "function_calls": function_calls_made,
-            "error": "Max function calls exceeded",
+            # Don't set "error" - this is a graceful failure with a message
         }
     
     def _extract_function_call(self, response_text: str) -> Optional[Dict[str, Any]]:
@@ -672,44 +711,107 @@ Is there a specific aspect of the calls you'd like me to analyse further?""",
         import json
         import re
         
+        logger.debug(f"Extracting function call from: {response_text[:500]}...")
+        
+        # Helper to fix common JSON issues from LLM output
+        def fix_json_string(json_str: str) -> str:
+            # Replace unescaped newlines inside strings with spaces
+            # This handles multi-line SQL that the model generates
+            fixed = json_str.replace('\r\n', ' ').replace('\n', ' ')
+            # Collapse multiple spaces
+            fixed = re.sub(r'\s+', ' ', fixed)
+            return fixed
+        
+        # Helper to extract balanced JSON object
+        def extract_json_object(text: str, start_pos: int = 0) -> Optional[str]:
+            """Extract a balanced JSON object starting from start_pos."""
+            idx = text.find('{', start_pos)
+            if idx == -1:
+                return None
+            
+            depth = 0
+            in_string = False
+            escape_next = False
+            
+            for i, char in enumerate(text[idx:], start=idx):
+                if escape_next:
+                    escape_next = False
+                    continue
+                if char == '\\':
+                    escape_next = True
+                    continue
+                if char == '"' and not escape_next:
+                    in_string = not in_string
+                    continue
+                if in_string:
+                    continue
+                if char == '{':
+                    depth += 1
+                elif char == '}':
+                    depth -= 1
+                    if depth == 0:
+                        return text[idx:i+1]
+            return None
+        
         # Pattern 1: FUNCTION_CALL: name {json}
-        match = re.search(r'FUNCTION_CALL:\s*(\w+)\s*(\{.*\})', response_text, re.DOTALL)
+        match = re.search(r'FUNCTION_CALL:\s*(\w+)\s*', response_text)
         if match:
-            try:
-                func_name = match.group(1)
-                args = json.loads(match.group(2))
-                return {"name": func_name, "arguments": args}
-            except json.JSONDecodeError:
-                pass
+            func_name = match.group(1)
+            json_str = extract_json_object(response_text, match.end())
+            if json_str:
+                try:
+                    json_str = fix_json_string(json_str)
+                    args = json.loads(json_str)
+                    logger.info(f"Extracted function call (pattern 1): {func_name}")
+                    return {"name": func_name, "arguments": args}
+                except json.JSONDecodeError as e:
+                    logger.warning(f"Failed to parse function args: {e}")
         
         # Pattern 2: Look for execute_sql_query or search_calls with JSON
         for func_name in ["execute_sql_query", "search_calls"]:
-            pattern = rf'{func_name}\s*[:\(]\s*(\{{.*?\}})'
-            match = re.search(pattern, response_text, re.DOTALL)
+            match = re.search(rf'{func_name}\s*[:\(]\s*', response_text)
             if match:
-                try:
-                    args = json.loads(match.group(1))
-                    return {"name": func_name, "arguments": args}
-                except json.JSONDecodeError:
-                    pass
+                json_str = extract_json_object(response_text, match.end())
+                if json_str:
+                    try:
+                        json_str = fix_json_string(json_str)
+                        args = json.loads(json_str)
+                        logger.info(f"Extracted function call (pattern 2): {func_name}")
+                        return {"name": func_name, "arguments": args}
+                    except json.JSONDecodeError:
+                        pass
         
-        # Pattern 3: Look for SQL query patterns and convert to function call
+        # Pattern 3: Look for SQL query patterns in code blocks
         sql_match = re.search(r'```sql\s*(SELECT.*?)```', response_text, re.DOTALL | re.IGNORECASE)
         if sql_match:
             query = sql_match.group(1).strip()
+            logger.info(f"Extracted SQL from code block")
             return {
                 "name": "execute_sql_query",
                 "arguments": {"query": query, "purpose": "User requested query"}
             }
         
-        # Pattern 4: Look for "I'll search for call X" patterns
+        # Pattern 4: Look for inline SELECT query (not in code block)
+        inline_sql = re.search(r'(SELECT\s+.+?(?:FROM|LIMIT)\s+.+?)(?:\n\n|$)', response_text, re.DOTALL | re.IGNORECASE)
+        if inline_sql:
+            query = inline_sql.group(1).strip()
+            if len(query) > 20:  # Avoid false positives
+                logger.info(f"Extracted inline SQL query")
+                return {
+                    "name": "execute_sql_query",
+                    "arguments": {"query": query, "purpose": "User requested query"}
+                }
+        
+        # Pattern 5: Look for "I'll search for call X" patterns
         search_match = re.search(r"(?:search|find|look up).*?(?:call|recording).*?['\"]?(\d+)['\"]?", response_text, re.IGNORECASE)
         if search_match:
+            logger.info(f"Extracted search call pattern")
             return {
                 "name": "search_calls",
                 "arguments": {"reference": search_match.group(1), "reference_type": "any"}
             }
         
+        logger.debug("No function call found in response")
         return None
     
     def _clean_function_syntax(self, text: str) -> str:

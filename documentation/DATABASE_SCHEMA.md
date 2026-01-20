@@ -109,10 +109,14 @@ CREATE TABLE ai_call_recordings (
 
 Transcription results with PII detection.
 
+Note: `apex_id` allows storing transcription without a recording (for Dojo training).
+When full analysis runs, `ai_call_recording_id` is linked via the processor.
+
 ```sql
 CREATE TABLE ai_call_transcriptions (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
-    ai_call_recording_id INT UNSIGNED NOT NULL,
+    ai_call_recording_id INT UNSIGNED DEFAULT NULL,  -- Nullable: may not have recording yet
+    apex_id VARCHAR(255) DEFAULT NULL,               -- Call identifier for lookup
     
     -- Transcript data
     full_transcript TEXT NOT NULL,
@@ -134,10 +138,31 @@ CREATE TABLE ai_call_transcriptions (
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
     
     -- Constraints
-    UNIQUE KEY unique_recording (ai_call_recording_id),
+    UNIQUE KEY unique_apex_id (apex_id),
+    INDEX idx_recording (ai_call_recording_id),
     FOREIGN KEY (ai_call_recording_id) 
-        REFERENCES ai_call_recordings(id) ON DELETE CASCADE
+        REFERENCES ai_call_recordings(id) ON DELETE SET NULL
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+#### Migration SQL
+
+To add `apex_id` to an existing table:
+
+```sql
+ALTER TABLE ai_call_transcriptions
+    ADD COLUMN apex_id VARCHAR(255) DEFAULT NULL AFTER ai_call_recording_id,
+    ADD UNIQUE KEY unique_apex_id (apex_id),
+    MODIFY COLUMN ai_call_recording_id INT UNSIGNED DEFAULT NULL,
+    DROP FOREIGN KEY ai_call_transcriptions_ibfk_1,
+    ADD FOREIGN KEY (ai_call_recording_id) 
+        REFERENCES ai_call_recordings(id) ON DELETE SET NULL;
+
+-- Backfill apex_id from existing recordings
+UPDATE ai_call_transcriptions t
+JOIN ai_call_recordings r ON t.ai_call_recording_id = r.id
+SET t.apex_id = r.apex_id
+WHERE t.apex_id IS NULL;
 ```
 
 #### JSON Column: segments
