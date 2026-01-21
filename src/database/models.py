@@ -209,6 +209,14 @@ class CallRecording:
         return datetime.now().year, datetime.now().month
 
 
+class TranscriptionStatus:
+    """Status values for transcription generation."""
+    PENDING = "pending"       # Not yet started
+    PROCESSING = "processing" # Currently being transcribed
+    COMPLETED = "completed"   # Successfully transcribed
+    FAILED = "failed"         # Transcription failed
+
+
 @dataclass
 class CallTranscription:
     """
@@ -230,7 +238,10 @@ class CallTranscription:
     confidence_score: float = 0.95
     model_used: str = "whisperx-medium"
     processing_time_seconds: int = 0
+    status: str = TranscriptionStatus.COMPLETED  # pending, processing, completed, failed
+    error_message: Optional[str] = None
     created_at: Optional[datetime] = None
+    updated_at: Optional[datetime] = None
     
     def save(self) -> int:
         """Save transcription to database and return the ID."""
@@ -240,27 +251,111 @@ class CallTranscription:
         segments_json = json.dumps(self.segments)
         pii_json = json.dumps(self.pii_detected) if self.pii_detected else None
         
-        self.id = db.insert("""
-            INSERT INTO ai_call_transcriptions 
-            (ai_call_recording_id, apex_id, full_transcript, segments, redacted_transcript,
-             pii_detected, language_detected, confidence_score, model_used, 
-             processing_time_seconds, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
-        """, (
-            self.ai_call_recording_id,
-            self.apex_id,
-            self.full_transcript,
-            segments_json,
-            self.redacted_transcript,
-            pii_json,
-            self.language_detected,
-            self.confidence_score,
-            self.model_used,
-            self.processing_time_seconds,
-        ))
+        if self.id:
+            # Update existing record
+            db.execute("""
+                UPDATE ai_call_transcriptions SET
+                    ai_call_recording_id = %s, full_transcript = %s, segments = %s,
+                    redacted_transcript = %s, pii_detected = %s, language_detected = %s,
+                    confidence_score = %s, model_used = %s, processing_time_seconds = %s,
+                    status = %s, error_message = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (
+                self.ai_call_recording_id,
+                self.full_transcript,
+                segments_json,
+                self.redacted_transcript,
+                pii_json,
+                self.language_detected,
+                self.confidence_score,
+                self.model_used,
+                self.processing_time_seconds,
+                self.status,
+                self.error_message,
+                self.id,
+            ))
+        else:
+            # Insert new record
+            self.id = db.insert("""
+                INSERT INTO ai_call_transcriptions 
+                (ai_call_recording_id, apex_id, full_transcript, segments, redacted_transcript,
+                 pii_detected, language_detected, confidence_score, model_used, 
+                 processing_time_seconds, status, error_message, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+            """, (
+                self.ai_call_recording_id,
+                self.apex_id,
+                self.full_transcript,
+                segments_json,
+                self.redacted_transcript,
+                pii_json,
+                self.language_detected,
+                self.confidence_score,
+                self.model_used,
+                self.processing_time_seconds,
+                self.status,
+                self.error_message,
+            ))
         
         logger.info(f"Saved transcription {self.id} for apex_id {self.apex_id}")
         return self.id
+    
+    def update_status(self, status: str, error_message: Optional[str] = None) -> None:
+        """Update just the status field."""
+        db = get_db_connection()
+        self.status = status
+        self.error_message = error_message
+        
+        if self.id:
+            db.execute("""
+                UPDATE ai_call_transcriptions 
+                SET status = %s, error_message = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (status, error_message, self.id))
+    
+    @staticmethod
+    def acquire_lock(
+        apex_id: str,
+        timeout_minutes: int = 5
+    ) -> Optional["CallTranscription"]:
+        """
+        Try to acquire a transcription lock for an apex_id.
+        
+        Returns CallTranscription with 'processing' status if lock acquired,
+        or None if already being processed.
+        """
+        db = get_db_connection()
+        
+        # Check if there's an existing transcription
+        existing = CallTranscription.get_by_apex_id(apex_id)
+        
+        if existing:
+            # If completed, return it (no need to re-transcribe)
+            if existing.status == TranscriptionStatus.COMPLETED:
+                return existing
+            
+            # If processing and not timed out, return None (already in progress)
+            if existing.status == TranscriptionStatus.PROCESSING:
+                if existing.updated_at:
+                    from datetime import timedelta
+                    timeout_threshold = datetime.now() - timedelta(minutes=timeout_minutes)
+                    if existing.updated_at > timeout_threshold:
+                        # Still within timeout, processing in progress
+                        return None
+                    # Timed out, allow retry
+                    logger.warning(f"Transcription processing timed out, allowing retry: {existing.id}")
+            
+            # Update existing to processing status
+            existing.update_status(TranscriptionStatus.PROCESSING)
+            return existing
+        
+        # Create new transcription record with processing status
+        new_transcription = CallTranscription(
+            apex_id=apex_id,
+            status=TranscriptionStatus.PROCESSING,
+        )
+        new_transcription.save()
+        return new_transcription
     
     @classmethod
     def from_row(cls, row: Dict[str, Any]) -> "CallTranscription":
@@ -285,7 +380,10 @@ class CallTranscription:
             confidence_score=float(row.get("confidence_score", 0.95)),
             model_used=row.get("model_used", "whisperx-medium"),
             processing_time_seconds=row.get("processing_time_seconds", 0),
+            status=row.get("status", TranscriptionStatus.COMPLETED),
+            error_message=row.get("error_message"),
             created_at=row.get("created_at"),
+            updated_at=row.get("updated_at"),
         )
     
     @staticmethod
@@ -293,7 +391,7 @@ class CallTranscription:
         """Find existing transcription by apex_id."""
         db = get_db_connection()
         row = db.fetch_one(
-            "SELECT * FROM ai_call_transcriptions WHERE apex_id = %s",
+            "SELECT * FROM ai_call_transcriptions WHERE apex_id = %s ORDER BY id DESC LIMIT 1",
             (apex_id,)
         )
         return CallTranscription.from_row(row) if row else None
@@ -517,6 +615,14 @@ class CallAnnotation:
         return db.fetch_all(query, tuple(params))
 
 
+class SummaryStatus:
+    """Status values for summary generation."""
+    PENDING = "pending"       # Not yet generated
+    GENERATING = "generating" # Currently being generated
+    COMPLETED = "completed"   # Successfully generated
+    FAILED = "failed"         # Generation failed
+
+
 @dataclass
 class Summary:
     """
@@ -533,6 +639,8 @@ class Summary:
     agent_id: Optional[int] = None
     summary_data: Dict[str, Any] = field(default_factory=dict)
     metrics: Optional[Dict[str, Any]] = None
+    status: str = SummaryStatus.PENDING  # pending, generating, completed, failed
+    error_message: Optional[str] = None
     generated_at: Optional[datetime] = None
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
@@ -541,32 +649,113 @@ class Summary:
         """Save or update summary."""
         db = get_db_connection()
         
-        summary_json = json.dumps(self.summary_data)
+        # Always serialize to valid JSON (empty dict if None)
+        summary_json = json.dumps(self.summary_data or {})
         metrics_json = json.dumps(self.metrics) if self.metrics else None
         
-        # Use INSERT ... ON DUPLICATE KEY UPDATE
-        self.id = db.insert("""
-            INSERT INTO ai_summaries
-            (feature, start_date, end_date, client_ref, campaign, agent_id,
-             summary_data, metrics, generated_at, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), NOW())
-            ON DUPLICATE KEY UPDATE
-             summary_data = VALUES(summary_data),
-             metrics = VALUES(metrics),
-             generated_at = NOW(),
-             updated_at = NOW()
-        """, (
-            self.feature,
-            self.start_date,
-            self.end_date,
-            self.client_ref,
-            self.campaign,
-            self.agent_id,
-            summary_json,
-            metrics_json,
-        ))
+        if self.id:
+            # Update existing record
+            db.execute("""
+                UPDATE ai_summaries SET
+                    summary_data = %s,
+                    metrics = %s,
+                    status = %s,
+                    error_message = %s,
+                    generated_at = NOW(),
+                    updated_at = NOW()
+                WHERE id = %s
+            """, (
+                summary_json,
+                metrics_json,
+                self.status,
+                self.error_message,
+                self.id,
+            ))
+        else:
+            # Insert new record
+            self.id = db.insert("""
+                INSERT INTO ai_summaries
+                (feature, start_date, end_date, client_ref, campaign, agent_id,
+                 summary_data, metrics, status, error_message, generated_at, created_at, updated_at)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW(), NOW())
+            """, (
+                self.feature,
+                self.start_date,
+                self.end_date,
+                self.client_ref,
+                self.campaign,
+                self.agent_id,
+                summary_json,
+                metrics_json,
+                self.status,
+                self.error_message,
+            ))
         
         return self.id
+    
+    def update_status(self, status: str, error_message: Optional[str] = None) -> None:
+        """Update just the status field."""
+        db = get_db_connection()
+        self.status = status
+        self.error_message = error_message
+        
+        if self.id:
+            db.execute("""
+                UPDATE ai_summaries 
+                SET status = %s, error_message = %s, updated_at = NOW()
+                WHERE id = %s
+            """, (status, error_message, self.id))
+    
+    @staticmethod
+    def acquire_lock(
+        feature: str,
+        start_date: str,
+        end_date: str,
+        client_ref: Optional[str] = None,
+        campaign: Optional[str] = None,
+        agent_id: Optional[int] = None,
+        timeout_minutes: int = 5
+    ) -> Optional["Summary"]:
+        """
+        Try to acquire a generation lock for this summary.
+        
+        Returns Summary with 'generating' status if lock acquired,
+        or None if already being generated.
+        """
+        db = get_db_connection()
+        
+        # Check if there's an existing summary being generated
+        existing = Summary.get(feature, start_date, end_date, client_ref, campaign, agent_id)
+        
+        if existing:
+            # If generating and not timed out, return None (already in progress)
+            if existing.status == SummaryStatus.GENERATING:
+                # Check if it's been stuck for too long (timeout)
+                if existing.updated_at:
+                    from datetime import timedelta
+                    timeout_threshold = datetime.now() - timedelta(minutes=timeout_minutes)
+                    if existing.updated_at > timeout_threshold:
+                        # Still within timeout, generation in progress
+                        return None
+                    # Timed out, allow retry
+                    logger.warning(f"Summary generation timed out, allowing retry: {existing.id}")
+            
+            # Update existing to generating status
+            existing.update_status(SummaryStatus.GENERATING)
+            return existing
+        
+        # Create new summary with generating status
+        new_summary = Summary(
+            feature=feature,
+            start_date=start_date,
+            end_date=end_date,
+            client_ref=client_ref,
+            campaign=campaign,
+            agent_id=agent_id,
+            status=SummaryStatus.GENERATING,
+        )
+        new_summary.save()
+        return new_summary
     
     @staticmethod
     def get(
@@ -604,6 +793,9 @@ class Summary:
         else:
             query += " AND agent_id IS NULL"
         
+        # Order by id DESC to get the most recent if duplicates exist
+        query += " ORDER BY id DESC LIMIT 1"
+        
         row = db.fetch_one(query, tuple(params))
         if not row:
             return None
@@ -618,6 +810,8 @@ class Summary:
             agent_id=row.get("agent_id"),
             summary_data=json.loads(row["summary_data"]) if row["summary_data"] else {},
             metrics=json.loads(row["metrics"]) if row.get("metrics") else None,
+            status=row.get("status", SummaryStatus.COMPLETED),
+            error_message=row.get("error_message"),
             generated_at=row.get("generated_at"),
             created_at=row.get("created_at"),
             updated_at=row.get("updated_at"),

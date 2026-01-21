@@ -8,7 +8,7 @@ Endpoints require Bearer token authentication.
 import logging
 import os
 from datetime import datetime
-from typing import Optional, List
+from typing import Optional, List, Dict
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
 from pydantic import BaseModel, Field
@@ -722,166 +722,195 @@ async def transcribe_call(request: TranscribeRequest):
     - Does NOT run sentiment/quality analysis
     
     If transcription already exists for this apex_id, returns cached result.
+    Returns 429 if transcription is already in progress by another user.
     """
     from src.services import TranscriptionService, AudioDownloader
-    from src.database import CallTranscription, get_db_connection
+    from src.database import CallTranscription, TranscriptionStatus, get_db_connection
     
     db = get_db_connection()
     apex_id = request.apex_id
     
-    try:
-        # Check if we already have a transcription for this apex_id
-        existing = CallTranscription.get_by_apex_id(apex_id)
-        if existing:
-            logger.info(f"Returning cached transcription for apex_id {apex_id}")
-            
-            # Map speaker labels for response (SPEAKER_00 -> agent, SPEAKER_01 -> customer)
-            segments = []
-            for seg in existing.segments:
-                speaker = seg.get("speaker", "SPEAKER_00")
-                # Simple mapping: first speaker is agent, second is customer
-                if speaker in ["SPEAKER_00", "agent"]:
-                    speaker_label = "agent"
-                else:
-                    speaker_label = "customer"
-                    
-                segments.append(TranscribeSegment(
-                    start=seg.get("start", 0.0),
-                    end=seg.get("end", 0.0),
-                    text=seg.get("text", ""),
-                    speaker=speaker_label
-                ))
-            
-            return TranscribeResponse(
-                success=True,
-                full_transcript=existing.full_transcript,
-                segments=segments,
-                language=existing.language_detected,
-                confidence_score=existing.confidence_score
-            )
-        
-        # Need to transcribe - first find call date for audio download
-        # Check if there's a recording record (may not exist for unanalysed calls)
-        recording_row = db.fetch_one(
-            "SELECT call_date, r2_path, r2_bucket FROM ai_call_recordings WHERE apex_id = %s",
-            (apex_id,)
+    # Try to acquire database lock for this transcription
+    transcription_lock = CallTranscription.acquire_lock(apex_id, timeout_minutes=5)
+    
+    if transcription_lock is None:
+        # Already being processed by another node
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "Transcription in progress",
+                "message": "This call is being transcribed by another user, please wait.",
+                "retry_after": 30
+            }
         )
+    
+    # Check if it's already completed (acquire_lock returns completed transcriptions)
+    if transcription_lock.status == TranscriptionStatus.COMPLETED and transcription_lock.full_transcript:
+        logger.info(f"Returning cached transcription for apex_id {apex_id}")
         
-        # Determine call_date from: 1) request, 2) database, 3) apex_id timestamp, 4) fallback to now
-        from datetime import datetime
-        call_date = None
-        r2_path = None
-        r2_bucket = None
+        # Map speaker labels for response (SPEAKER_00 -> agent, SPEAKER_01 -> customer)
+        segments = []
+        for seg in transcription_lock.segments:
+            speaker = seg.get("speaker", "SPEAKER_00")
+            # Simple mapping: first speaker is agent, second is customer
+            if speaker in ["SPEAKER_00", "agent"]:
+                speaker_label = "agent"
+            else:
+                speaker_label = "customer"
+                
+            segments.append(TranscribeSegment(
+                start=seg.get("start", 0.0),
+                end=seg.get("end", 0.0),
+                text=seg.get("text", ""),
+                speaker=speaker_label
+            ))
         
-        # 1. Use call_date from request if provided
-        if request.call_date:
-            try:
-                call_date = datetime.strptime(request.call_date, "%Y-%m-%d")
-            except ValueError:
-                logger.warning(f"Invalid call_date format: {request.call_date}, expected YYYY-MM-DD")
-        
-        # 2. Use database values if available
-        if recording_row:
-            if not call_date:
-                call_date = recording_row.get("call_date")
-            r2_path = recording_row.get("r2_path")
-            r2_bucket = recording_row.get("r2_bucket")
-        
-        # 3. Parse timestamp from apex_id
-        if not call_date:
-            try:
-                timestamp = float(apex_id.split('.')[0])
-                call_date = datetime.fromtimestamp(timestamp)
-            except (ValueError, IndexError):
-                pass
-        
-        # 4. Fallback to now (unlikely to find file, but won't crash)
-        if not call_date:
-            call_date = datetime.now()
-            logger.warning(f"Could not determine call_date for apex_id {apex_id}, using current date")
-        
-        # Download audio
-        downloader = AudioDownloader()
-        audio_path, is_local = downloader.download_recording(
-            apex_id=apex_id,
-            call_date=call_date,
-            r2_path=r2_path,
-            r2_bucket=r2_bucket
-        )
-        
-        try:
-            # Transcribe
-            transcriber = TranscriptionService()
-            result = transcriber.transcribe(
-                audio_path=audio_path,
-                language="en",
-                diarize=True
-            )
-            
-            if not result or not result.get("full_transcript"):
-                return TranscribeResponse(
-                    success=False,
-                    message="Transcription produced no results"
-                )
-            
-            # Save transcription to database (with apex_id, no recording_id yet)
-            transcription = CallTranscription(
-                apex_id=apex_id,
-                ai_call_recording_id=None,  # Will be linked later if full analysis runs
-                full_transcript=result["full_transcript"],
-                segments=result["segments"],
-                language_detected=result.get("language_detected", "en"),
-                confidence_score=result.get("confidence", 0.95),
-                model_used=result.get("model_used", "whisperx-medium"),
-                processing_time_seconds=int(result.get("processing_time", 0))
-            )
-            transcription.save()
-            
-            logger.info(f"Saved new transcription for apex_id {apex_id}")
-            
-            # Map speaker labels for response
-            segments = []
-            for seg in result["segments"]:
-                speaker = seg.get("speaker", "SPEAKER_00")
-                if speaker in ["SPEAKER_00", "agent"]:
-                    speaker_label = "agent"
-                else:
-                    speaker_label = "customer"
-                    
-                segments.append(TranscribeSegment(
-                    start=seg.get("start", 0.0),
-                    end=seg.get("end", 0.0),
-                    text=seg.get("text", ""),
-                    speaker=speaker_label
-                ))
-            
-            return TranscribeResponse(
-                success=True,
-                full_transcript=result["full_transcript"],
-                segments=segments,
-                language=result.get("language_detected", "en"),
-                confidence_score=result.get("confidence", 0.95)
-            )
-            
-        finally:
-            # Clean up audio file if not local
-            if not is_local and audio_path and os.path.exists(audio_path):
-                try:
-                    os.remove(audio_path)
-                except Exception:
-                    pass
-                    
-    except FileNotFoundError as e:
-        logger.warning(f"Audio not found for apex_id {apex_id}: {e}")
         return TranscribeResponse(
-            success=False,
-            message=f"Audio file not found for apex_id {apex_id}"
+            success=True,
+            full_transcript=transcription_lock.full_transcript,
+            segments=segments,
+            language=transcription_lock.language_detected,
+            confidence_score=transcription_lock.confidence_score
         )
+    
+    try:
+            # Need to transcribe - first find call date for audio download
+            # Check if there's a recording record (may not exist for unanalysed calls)
+            recording_row = db.fetch_one(
+                "SELECT call_date, r2_path, r2_bucket FROM ai_call_recordings WHERE apex_id = %s",
+                (apex_id,)
+            )
+            
+            # Determine call_date from: 1) request, 2) database, 3) apex_id timestamp, 4) fallback to now
+            from datetime import datetime as dt
+            call_date = None
+            r2_path = None
+            r2_bucket = None
+            
+            # 1. Use call_date from request if provided
+            if request.call_date:
+                try:
+                    call_date = dt.strptime(request.call_date, "%Y-%m-%d")
+                except ValueError:
+                    logger.warning(f"Invalid call_date format: {request.call_date}, expected YYYY-MM-DD")
+            
+            # 2. Use database values if available
+            if recording_row:
+                if not call_date:
+                    call_date = recording_row.get("call_date")
+                r2_path = recording_row.get("r2_path")
+                r2_bucket = recording_row.get("r2_bucket")
+            
+            # 3. Parse timestamp from apex_id
+            if not call_date:
+                try:
+                    timestamp = float(apex_id.split('.')[0])
+                    call_date = dt.fromtimestamp(timestamp)
+                except (ValueError, IndexError):
+                    pass
+            
+            # 4. Fallback to now (unlikely to find file, but won't crash)
+            if not call_date:
+                call_date = dt.now()
+                logger.warning(f"Could not determine call_date for apex_id {apex_id}, using current date")
+            
+            # Download audio
+            downloader = AudioDownloader()
+            audio_path, is_local = downloader.download_recording(
+                apex_id=apex_id,
+                call_date=call_date,
+                r2_path=r2_path,
+                r2_bucket=r2_bucket
+            )
+            
+            try:
+                # Transcribe
+                transcriber = TranscriptionService()
+                result = transcriber.transcribe(
+                    audio_path=audio_path,
+                    language="en",
+                    diarize=True
+                )
+                
+                if not result or not result.get("full_transcript"):
+                    transcription_lock.update_status(TranscriptionStatus.FAILED, "Transcription produced no results")
+                    return TranscribeResponse(
+                        success=False,
+                        message="Transcription produced no results"
+                    )
+                
+                # Update the transcription lock with completed data
+                transcription_lock.full_transcript = result["full_transcript"]
+                transcription_lock.segments = result["segments"]
+                transcription_lock.language_detected = result.get("language_detected", "en")
+                transcription_lock.confidence_score = result.get("confidence", 0.95)
+                transcription_lock.model_used = result.get("model_used", "whisperx-medium")
+                transcription_lock.processing_time_seconds = int(result.get("processing_time", 0))
+                transcription_lock.status = TranscriptionStatus.COMPLETED
+                transcription_lock.error_message = None
+                transcription_lock.save()
+                
+                logger.info(f"Saved new transcription for apex_id {apex_id}")
+                
+                # Map speaker labels for response
+                segments = []
+                for seg in result["segments"]:
+                    speaker = seg.get("speaker", "SPEAKER_00")
+                    if speaker in ["SPEAKER_00", "agent"]:
+                        speaker_label = "agent"
+                    else:
+                        speaker_label = "customer"
+                        
+                    segments.append(TranscribeSegment(
+                        start=seg.get("start", 0.0),
+                        end=seg.get("end", 0.0),
+                        text=seg.get("text", ""),
+                        speaker=speaker_label
+                    ))
+                
+                return TranscribeResponse(
+                    success=True,
+                    full_transcript=result["full_transcript"],
+                    segments=segments,
+                    language=result.get("language_detected", "en"),
+                    confidence_score=result.get("confidence", 0.95)
+                )
+                
+            finally:
+                # Clean up audio file if not local
+                if not is_local and audio_path and os.path.exists(audio_path):
+                    try:
+                        os.remove(audio_path)
+                    except Exception:
+                        pass
+                    
+    except HTTPException:
+        # Re-raise HTTP exceptions (including 429)
+        raise
+    except FileNotFoundError as e:
+        error_str = str(e)
+        logger.warning(f"Audio not found for apex_id {apex_id}: {e}")
+        # Mark as failed so retry is allowed
+        transcription_lock.update_status(TranscriptionStatus.FAILED, error_str)
+        
+        # Distinguish between missing audio file vs missing conversion tools
+        if "conversion tool" in error_str.lower() or "sox" in error_str.lower() or "ffmpeg" in error_str.lower():
+            raise HTTPException(
+                status_code=500,
+                detail=f"Audio conversion tool missing: {error_str}"
+            )
+        else:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Audio file not found for apex_id {apex_id}. Tried all storage locations (local, R2, PBX live, PBX archive)."
+            )
     except Exception as e:
         logger.error(f"Transcription failed for apex_id {apex_id}: {e}", exc_info=True)
-        return TranscribeResponse(
-            success=False,
-            message=f"Transcription failed: {str(e)}"
+        # Mark as failed so retry is allowed
+        transcription_lock.update_status(TranscriptionStatus.FAILED, str(e))
+        raise HTTPException(
+            status_code=500,
+            detail=f"Transcription failed: {str(e)}"
         )
 
 
@@ -991,275 +1020,309 @@ async def generate_summary(request: SummaryGenerateRequest):
     
     Aggregates call data for the specified date range and generates
     AI-powered insights and recommendations.
+    
+    Returns 429 if a summary is already being generated for the same period.
     """
-    from src.database import Summary
+    from src.database import Summary, SummaryStatus
     from src.services.interactive import get_interactive_service
     
     db = get_db_connection()
     
-    # Build the filter query
-    query = """
-        SELECT 
-            COUNT(*) as call_count,
-            AVG(a.quality_score) as avg_quality,
-            AVG(a.sentiment_score) as avg_sentiment,
-            SUM(r.duration_seconds) as total_duration
-        FROM ai_call_analysis a
-        JOIN ai_call_recordings r ON a.ai_call_recording_id = r.id
-        WHERE r.call_date >= %s AND r.call_date <= %s
-    """
-    params = [request.start_date, request.end_date]
-    
-    filters = {"start_date": request.start_date, "end_date": request.end_date}
-    
-    if request.client_ref:
-        query += " AND r.client_ref = %s"
-        params.append(request.client_ref)
-        filters["client_ref"] = request.client_ref
-    
-    if request.campaign:
-        query += " AND r.campaign = %s"
-        params.append(request.campaign)
-        filters["campaign"] = request.campaign
-    
-    if request.agent_id:
-        query += " AND r.halo_id = %s"
-        params.append(request.agent_id)
-        filters["agent_id"] = request.agent_id
-    
-    metrics_row = db.fetch_one(query, tuple(params))
-    
-    if not metrics_row or metrics_row["call_count"] == 0:
-        return SummaryGenerateResponse(
-            success=False,
-            message="No call data found for the specified period"
-        )
-    
-    # Prepare basic metrics for summary generation
-    data = {
-        "call_count": metrics_row["call_count"],
-        "avg_quality_score": float(metrics_row["avg_quality"] or 0),
-        "avg_sentiment_score": float(metrics_row["avg_sentiment"] or 0),
-        "total_duration_seconds": int(metrics_row["total_duration"] or 0),
-    }
-    
-    # Fetch richer data for better AI insights
-    
-    # Top performing agents
-    top_agents_query = """
-        SELECT r.agent_name, r.halo_id, COUNT(*) as call_count,
-               AVG(a.quality_score) as avg_quality, AVG(a.sentiment_score) as avg_sentiment
-        FROM ai_call_recordings r
-        JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
-        WHERE r.call_date >= %s AND r.call_date <= %s AND r.agent_name IS NOT NULL
-    """
-    top_params = [request.start_date, request.end_date]
-    if request.client_ref:
-        top_agents_query += " AND r.client_ref = %s"
-        top_params.append(request.client_ref)
-    if request.campaign:
-        top_agents_query += " AND r.campaign = %s"
-        top_params.append(request.campaign)
-    top_agents_query += " GROUP BY r.agent_name, r.halo_id HAVING call_count >= 3 ORDER BY avg_quality DESC LIMIT 5"
-    
-    top_agents = db.fetch_all(top_agents_query, tuple(top_params))
-    data["top_agents"] = [
-        {"name": row["agent_name"], "calls": row["call_count"], 
-         "quality": float(row["avg_quality"] or 0), "sentiment": float(row["avg_sentiment"] or 0)}
-        for row in top_agents
-    ]
-    
-    # Bottom performing agents (needing coaching)
-    bottom_agents_query = top_agents_query.replace("ORDER BY avg_quality DESC", "ORDER BY avg_quality ASC")
-    bottom_agents = db.fetch_all(bottom_agents_query, tuple(top_params))
-    data["agents_needing_coaching"] = [
-        {"name": row["agent_name"], "calls": row["call_count"],
-         "quality": float(row["avg_quality"] or 0), "sentiment": float(row["avg_sentiment"] or 0)}
-        for row in bottom_agents
-    ]
-    
-    # Quality distribution
-    quality_dist_query = """
-        SELECT 
-            SUM(CASE WHEN a.quality_score >= 80 THEN 1 ELSE 0 END) as excellent,
-            SUM(CASE WHEN a.quality_score >= 60 AND a.quality_score < 80 THEN 1 ELSE 0 END) as good,
-            SUM(CASE WHEN a.quality_score >= 40 AND a.quality_score < 60 THEN 1 ELSE 0 END) as average,
-            SUM(CASE WHEN a.quality_score < 40 THEN 1 ELSE 0 END) as poor
-        FROM ai_call_recordings r
-        JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
-        WHERE r.call_date >= %s AND r.call_date <= %s
-    """
-    qual_params = [request.start_date, request.end_date]
-    if request.client_ref:
-        quality_dist_query += " AND r.client_ref = %s"
-        qual_params.append(request.client_ref)
-    if request.campaign:
-        quality_dist_query += " AND r.campaign = %s"
-        qual_params.append(request.campaign)
-    
-    qual_dist = db.fetch_one(quality_dist_query, tuple(qual_params))
-    if qual_dist:
-        data["quality_distribution"] = {
-            "excellent_80_plus": int(qual_dist["excellent"] or 0),
-            "good_60_79": int(qual_dist["good"] or 0),
-            "average_40_59": int(qual_dist["average"] or 0),
-            "poor_below_40": int(qual_dist["poor"] or 0),
-        }
-    
-    # Common improvement areas (from the new improvement_areas field)
-    improvement_query = """
-        SELECT a.improvement_areas
-        FROM ai_call_recordings r
-        JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
-        WHERE r.call_date >= %s AND r.call_date <= %s
-          AND a.improvement_areas IS NOT NULL AND a.improvement_areas != '[]'
-    """
-    imp_params = [request.start_date, request.end_date]
-    if request.client_ref:
-        improvement_query += " AND r.client_ref = %s"
-        imp_params.append(request.client_ref)
-    if request.campaign:
-        improvement_query += " AND r.campaign = %s"
-        imp_params.append(request.campaign)
-    improvement_query += " LIMIT 100"
-    
-    improvement_rows = db.fetch_all(improvement_query, tuple(imp_params))
-    area_counts = {}
-    for row in improvement_rows:
-        try:
-            import json
-            areas = json.loads(row["improvement_areas"]) if isinstance(row["improvement_areas"], str) else row["improvement_areas"]
-            if isinstance(areas, list):
-                for area in areas:
-                    area_name = area.get("area") if isinstance(area, dict) else str(area)
-                    if area_name:
-                        area_counts[area_name] = area_counts.get(area_name, 0) + 1
-        except:
-            pass
-    
-    # Sort by frequency and take top 10
-    sorted_areas = sorted(area_counts.items(), key=lambda x: x[1], reverse=True)[:10]
-    data["common_improvement_areas"] = [{"area": area, "count": count} for area, count in sorted_areas]
-    
-    # Compliance issue count
-    compliance_query = """
-        SELECT COUNT(*) as issue_count
-        FROM ai_call_recordings r
-        JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
-        WHERE r.call_date >= %s AND r.call_date <= %s
-          AND a.compliance_flags IS NOT NULL AND a.compliance_flags != '[]'
-    """
-    comp_params = [request.start_date, request.end_date]
-    if request.client_ref:
-        compliance_query += " AND r.client_ref = %s"
-        comp_params.append(request.client_ref)
-    if request.campaign:
-        compliance_query += " AND r.campaign = %s"
-        comp_params.append(request.campaign)
-    
-    compliance_row = db.fetch_one(compliance_query, tuple(comp_params))
-    data["calls_with_compliance_issues"] = int(compliance_row["issue_count"] or 0) if compliance_row else 0
-    
-    # Topic breakdown
-    topic_query = """
-        SELECT a.key_topics
-        FROM ai_call_recordings r
-        JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
-        WHERE r.call_date >= %s AND r.call_date <= %s
-          AND a.key_topics IS NOT NULL AND a.key_topics != '[]'
-    """
-    topic_params = [request.start_date, request.end_date]
-    if request.client_ref:
-        topic_query += " AND r.client_ref = %s"
-        topic_params.append(request.client_ref)
-    if request.campaign:
-        topic_query += " AND r.campaign = %s"
-        topic_params.append(request.campaign)
-    topic_query += " LIMIT 100"
-    
-    topic_rows = db.fetch_all(topic_query, tuple(topic_params))
-    topic_counts = {}
-    for row in topic_rows:
-        try:
-            import json
-            topics = json.loads(row["key_topics"]) if isinstance(row["key_topics"], str) else row["key_topics"]
-            if isinstance(topics, list):
-                for topic in topics:
-                    topic_name = topic.get("name") if isinstance(topic, dict) else str(topic)
-                    if topic_name:
-                        topic_counts[topic_name] = topic_counts.get(topic_name, 0) + 1
-        except:
-            pass
-    
-    sorted_topics = sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:10]
-    data["top_topics"] = [{"topic": topic, "count": count} for topic, count in sorted_topics]
-
-    # Use interactive service for AI summary
-    # In API mode, proxy to interactive workers; otherwise run locally
-    settings = get_settings()
-    
-    if settings.worker_mode == "api" and settings.interactive_service_url:
-        from src.services.interactive_proxy import get_interactive_proxy
-        proxy = get_interactive_proxy()
-        result = proxy.generate_summary(
-            transcript=str(data),  # Pass data as transcript
-            summary_type="monthly",
-            custom_prompt=f"Generate a summary for: {filters}",
-        )
-    else:
-        from src.services.interactive import get_interactive_service
-        service = get_interactive_service()
-        result = service.generate_summary(
-            data=data,
-            summary_type="monthly",
-            filters=filters,
-        )
-    
-    # Check for proxy errors and raise HTTPException
-    if result.get("error"):
-        error_type = result.get("error_type", "unknown")
-        error_msg = result.get("error_message") or result.get("summary", "AI service error")
-        logger.error(f"Summary error: {error_type} - {error_msg}")
-        raise HTTPException(
-            status_code=503 if error_type in ["timeout", "connection_error"] else 500,
-            detail={
-                "error": error_msg,
-                "error_type": error_type,
-            }
-        )
-    
-    summary_data = {
-        "summary": result["summary"],
-        "key_insights": result["key_insights"],
-        "recommendations": result["recommendations"],
-    }
-    
-    metrics = {
-        "call_count": data["call_count"],
-        "avg_quality_score": data["avg_quality_score"],
-        "avg_sentiment_score": data["avg_sentiment_score"],
-        "total_duration_seconds": data["total_duration_seconds"],
-    }
-    
-    # Save to database
-    summary = Summary(
+    # Try to acquire generation lock
+    summary_lock = Summary.acquire_lock(
         feature=request.feature,
         start_date=request.start_date,
         end_date=request.end_date,
         client_ref=request.client_ref,
         campaign=request.campaign,
         agent_id=request.agent_id,
-        summary_data=summary_data,
-        metrics=metrics,
+        timeout_minutes=5
     )
-    summary_id = summary.save()
     
-    return SummaryGenerateResponse(
-        success=True,
-        summary_id=summary_id,
-        summary_data=summary_data,
-        message="Summary generated successfully"
-    )
+    if summary_lock is None:
+        # Already being generated
+        raise HTTPException(
+            status_code=429,
+            detail={
+                "error": "Summary generation already in progress",
+                "message": "A summary for this period is currently being generated. Please wait and try again.",
+                "retry_after": 30
+            }
+        )
+    
+    try:
+        # Build the filter query
+        query = """
+            SELECT 
+                COUNT(*) as call_count,
+                AVG(a.quality_score) as avg_quality,
+                AVG(a.sentiment_score) as avg_sentiment,
+                SUM(r.duration_seconds) as total_duration
+            FROM ai_call_analysis a
+            JOIN ai_call_recordings r ON a.ai_call_recording_id = r.id
+            WHERE r.call_date >= %s AND r.call_date <= %s
+        """
+        params = [request.start_date, request.end_date]
+        
+        filters = {"start_date": request.start_date, "end_date": request.end_date}
+        
+        if request.client_ref:
+            query += " AND r.client_ref = %s"
+            params.append(request.client_ref)
+            filters["client_ref"] = request.client_ref
+        
+        if request.campaign:
+            query += " AND r.campaign = %s"
+            params.append(request.campaign)
+            filters["campaign"] = request.campaign
+        
+        if request.agent_id:
+            query += " AND r.halo_id = %s"
+            params.append(request.agent_id)
+            filters["agent_id"] = request.agent_id
+        
+        metrics_row = db.fetch_one(query, tuple(params))
+    
+        if not metrics_row or metrics_row["call_count"] == 0:
+            summary_lock.update_status(SummaryStatus.FAILED, "No call data found")
+            return SummaryGenerateResponse(
+                success=False,
+                message="No call data found for the specified period"
+            )
+        
+        # Prepare basic metrics for summary generation
+        data = {
+            "call_count": metrics_row["call_count"],
+            "avg_quality_score": float(metrics_row["avg_quality"] or 0),
+            "avg_sentiment_score": float(metrics_row["avg_sentiment"] or 0),
+            "total_duration_seconds": int(metrics_row["total_duration"] or 0),
+        }
+        
+        # Fetch richer data for better AI insights
+        
+        # Top performing agents
+        top_agents_query = """
+            SELECT r.agent_name, r.halo_id, COUNT(*) as call_count,
+                   AVG(a.quality_score) as avg_quality, AVG(a.sentiment_score) as avg_sentiment
+            FROM ai_call_recordings r
+            JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+            WHERE r.call_date >= %s AND r.call_date <= %s AND r.agent_name IS NOT NULL
+        """
+        top_params = [request.start_date, request.end_date]
+        if request.client_ref:
+            top_agents_query += " AND r.client_ref = %s"
+            top_params.append(request.client_ref)
+        if request.campaign:
+            top_agents_query += " AND r.campaign = %s"
+            top_params.append(request.campaign)
+        top_agents_query += " GROUP BY r.agent_name, r.halo_id HAVING call_count >= 3 ORDER BY avg_quality DESC LIMIT 5"
+        
+        top_agents = db.fetch_all(top_agents_query, tuple(top_params))
+        data["top_agents"] = [
+            {"name": row["agent_name"], "calls": row["call_count"], 
+             "quality": float(row["avg_quality"] or 0), "sentiment": float(row["avg_sentiment"] or 0)}
+            for row in top_agents
+        ]
+        
+        # Bottom performing agents (needing coaching)
+        bottom_agents_query = top_agents_query.replace("ORDER BY avg_quality DESC", "ORDER BY avg_quality ASC")
+        bottom_agents = db.fetch_all(bottom_agents_query, tuple(top_params))
+        data["agents_needing_coaching"] = [
+            {"name": row["agent_name"], "calls": row["call_count"],
+             "quality": float(row["avg_quality"] or 0), "sentiment": float(row["avg_sentiment"] or 0)}
+            for row in bottom_agents
+        ]
+        
+        # Quality distribution
+        quality_dist_query = """
+            SELECT 
+                SUM(CASE WHEN a.quality_score >= 80 THEN 1 ELSE 0 END) as excellent,
+                SUM(CASE WHEN a.quality_score >= 60 AND a.quality_score < 80 THEN 1 ELSE 0 END) as good,
+                SUM(CASE WHEN a.quality_score >= 40 AND a.quality_score < 60 THEN 1 ELSE 0 END) as average,
+                SUM(CASE WHEN a.quality_score < 40 THEN 1 ELSE 0 END) as poor
+            FROM ai_call_recordings r
+            JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+            WHERE r.call_date >= %s AND r.call_date <= %s
+        """
+        qual_params = [request.start_date, request.end_date]
+        if request.client_ref:
+            quality_dist_query += " AND r.client_ref = %s"
+            qual_params.append(request.client_ref)
+        if request.campaign:
+            quality_dist_query += " AND r.campaign = %s"
+            qual_params.append(request.campaign)
+        
+        qual_dist = db.fetch_one(quality_dist_query, tuple(qual_params))
+        if qual_dist:
+            data["quality_distribution"] = {
+                "excellent_80_plus": int(qual_dist["excellent"] or 0),
+                "good_60_79": int(qual_dist["good"] or 0),
+                "average_40_59": int(qual_dist["average"] or 0),
+                "poor_below_40": int(qual_dist["poor"] or 0),
+            }
+        
+        # Common improvement areas (from the new improvement_areas field)
+        improvement_query = """
+            SELECT a.improvement_areas
+            FROM ai_call_recordings r
+            JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+            WHERE r.call_date >= %s AND r.call_date <= %s
+              AND a.improvement_areas IS NOT NULL AND a.improvement_areas != '[]'
+        """
+        imp_params = [request.start_date, request.end_date]
+        if request.client_ref:
+            improvement_query += " AND r.client_ref = %s"
+            imp_params.append(request.client_ref)
+        if request.campaign:
+            improvement_query += " AND r.campaign = %s"
+            imp_params.append(request.campaign)
+        improvement_query += " LIMIT 100"
+        
+        improvement_rows = db.fetch_all(improvement_query, tuple(imp_params))
+        area_counts = {}
+        for row in improvement_rows:
+            try:
+                import json
+                areas = json.loads(row["improvement_areas"]) if isinstance(row["improvement_areas"], str) else row["improvement_areas"]
+                if isinstance(areas, list):
+                    for area in areas:
+                        area_name = area.get("area") if isinstance(area, dict) else str(area)
+                        if area_name:
+                            area_counts[area_name] = area_counts.get(area_name, 0) + 1
+            except:
+                pass
+        
+        # Sort by frequency and take top 10
+        sorted_areas = sorted(area_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        data["common_improvement_areas"] = [{"area": area, "count": count} for area, count in sorted_areas]
+        
+        # Compliance issue count
+        compliance_query = """
+            SELECT COUNT(*) as issue_count
+            FROM ai_call_recordings r
+            JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+            WHERE r.call_date >= %s AND r.call_date <= %s
+              AND a.compliance_flags IS NOT NULL AND a.compliance_flags != '[]'
+        """
+        comp_params = [request.start_date, request.end_date]
+        if request.client_ref:
+            compliance_query += " AND r.client_ref = %s"
+            comp_params.append(request.client_ref)
+        if request.campaign:
+            compliance_query += " AND r.campaign = %s"
+            comp_params.append(request.campaign)
+        
+        compliance_row = db.fetch_one(compliance_query, tuple(comp_params))
+        data["calls_with_compliance_issues"] = int(compliance_row["issue_count"] or 0) if compliance_row else 0
+        
+        # Topic breakdown
+        topic_query = """
+            SELECT a.key_topics
+            FROM ai_call_recordings r
+            JOIN ai_call_analysis a ON r.id = a.ai_call_recording_id
+            WHERE r.call_date >= %s AND r.call_date <= %s
+              AND a.key_topics IS NOT NULL AND a.key_topics != '[]'
+        """
+        topic_params = [request.start_date, request.end_date]
+        if request.client_ref:
+            topic_query += " AND r.client_ref = %s"
+            topic_params.append(request.client_ref)
+        if request.campaign:
+            topic_query += " AND r.campaign = %s"
+            topic_params.append(request.campaign)
+        topic_query += " LIMIT 100"
+        
+        topic_rows = db.fetch_all(topic_query, tuple(topic_params))
+        topic_counts = {}
+        for row in topic_rows:
+            try:
+                import json
+                topics = json.loads(row["key_topics"]) if isinstance(row["key_topics"], str) else row["key_topics"]
+                if isinstance(topics, list):
+                    for topic in topics:
+                        topic_name = topic.get("name") if isinstance(topic, dict) else str(topic)
+                        if topic_name:
+                            topic_counts[topic_name] = topic_counts.get(topic_name, 0) + 1
+            except:
+                pass
+        
+        sorted_topics = sorted(topic_counts.items(), key=lambda x: x[1], reverse=True)[:10]
+        data["top_topics"] = [{"topic": topic, "count": count} for topic, count in sorted_topics]
+
+        # Use interactive service for AI summary
+        # In API mode, proxy to interactive workers; otherwise run locally
+        settings = get_settings()
+        
+        if settings.worker_mode == "api" and settings.interactive_service_url:
+            from src.services.interactive_proxy import get_interactive_proxy
+            proxy = get_interactive_proxy()
+            result = proxy.generate_summary(
+                transcript=str(data),  # Pass data as transcript
+                summary_type="monthly",
+                custom_prompt=f"Generate a summary for: {filters}",
+            )
+        else:
+            from src.services.interactive import get_interactive_service
+            service = get_interactive_service()
+            result = service.generate_summary(
+                data=data,
+                summary_type="monthly",
+                filters=filters,
+            )
+        
+        # Check for proxy errors and raise HTTPException
+        if result.get("error"):
+            error_type = result.get("error_type", "unknown")
+            error_msg = result.get("error_message") or result.get("summary", "AI service error")
+            logger.error(f"Summary error: {error_type} - {error_msg}")
+            # Mark as failed so retry is allowed
+            summary_lock.update_status(SummaryStatus.FAILED, error_msg)
+            raise HTTPException(
+                status_code=503 if error_type in ["timeout", "connection_error"] else 500,
+                detail={
+                    "error": error_msg,
+                    "error_type": error_type,
+                }
+            )
+        
+        summary_data = {
+            "summary": result["summary"],
+            "key_insights": result["key_insights"],
+            "recommendations": result["recommendations"],
+        }
+        
+        metrics = {
+            "call_count": data["call_count"],
+            "avg_quality_score": data["avg_quality_score"],
+            "avg_sentiment_score": data["avg_sentiment_score"],
+            "total_duration_seconds": data["total_duration_seconds"],
+        }
+        
+        # Update the locked summary with completed data
+        summary_lock.summary_data = summary_data
+        summary_lock.metrics = metrics
+        summary_lock.status = SummaryStatus.COMPLETED
+        summary_lock.error_message = None
+        summary_id = summary_lock.save()
+        
+        return SummaryGenerateResponse(
+            success=True,
+            summary_id=summary_id,
+            summary_data=summary_data,
+            message="Summary generated successfully"
+        )
+
+    except HTTPException:
+        # Re-raise HTTP exceptions (already handled above)
+        raise
+    except Exception as e:
+        logger.error(f"Summary generation failed: {e}", exc_info=True)
+        # Mark as failed so retry is allowed
+        summary_lock.update_status(SummaryStatus.FAILED, str(e))
+        raise HTTPException(
+            status_code=500,
+            detail={"error": f"Summary generation failed: {str(e)}"}
+        )
 
 
 # =============================================================================

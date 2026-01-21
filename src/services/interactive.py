@@ -334,42 +334,30 @@ Key guidelines:
         
         data_text = "\n\n".join(data_sections)
         
-        prompt = f"""Generate a comprehensive {summary_type} call quality summary{filter_desc}.
+        prompt = f"""Write a SHORT {summary_type} call quality summary{filter_desc}.
 
 {data_text}
 
-Based on this data, provide a detailed summary in Markdown format:
+FORMAT (use exactly these headers, keep each section brief):
 
-1. **Executive Summary** (3-4 sentences highlighting the most important findings with **bold** key metrics)
+## Summary
+One paragraph, 2-3 sentences max. Bold the key numbers.
 
-2. ### Performance Overview
-   - Comment on overall quality and sentiment trends
-   - Highlight the quality distribution (what % of calls are excellent vs poor)
+## Agents Needing Coaching
+Bullet list: name, score, calls. Maximum 5 agents. No commentary.
 
-3. ### Top Performers
-   - Recognise the best performing agents by name
-   - Note what makes them stand out
+## Actions
+3-4 bullet points. One line each. Actionable and specific.
 
-4. ### Coaching Priorities  
-   - Identify agents who need additional support
-   - Connect to the common improvement areas
-   - Be constructive and actionable
-
-5. ### Key Improvement Areas
-   - Analyse the most common issues across the team
-   - Provide specific, actionable recommendations for each
-
-6. ### Call Topics & Compliance
-   - Summarise what calls were about
-   - Flag any compliance concerns
-
-7. ### Recommendations
-   - 3-5 specific, prioritised action items for management
-
-Use British English. Be specific and data-driven. Reference actual numbers and agent names from the data. Format with proper Markdown headers and bullet points."""
+RULES:
+- Maximum 150 words total
+- No introductions or conclusions
+- No filler phrases
+- Do not repeat data already shown
+- British English"""
 
         messages = [
-            {"role": "system", "content": "You are an expert call quality analyst generating detailed performance reports for a charity fundraising company. Your summaries help managers understand team performance and prioritise coaching efforts. Always use the full client name, never shorthand codes."},
+            {"role": "system", "content": "You write extremely concise reports. No fluff. Bullet points only. Maximum 150 words."},
             {"role": "user", "content": prompt}
         ]
         
@@ -383,9 +371,9 @@ Use British English. Be specific and data-driven. Reference actual numbers and a
             with torch.no_grad():
                 outputs = self._model.generate(
                     inputs,
-                    max_new_tokens=2048,  # Increased for comprehensive summaries
+                    max_new_tokens=400,  # Strict limit for concise output
                     do_sample=True,
-                    temperature=0.7,
+                    temperature=0.5,  # Lower temp for more focused output
                     top_p=0.9,
                     pad_token_id=self._tokenizer.eos_token_id,
                 )
@@ -406,45 +394,68 @@ Use British English. Be specific and data-driven. Reference actual numbers and a
         data: Dict[str, Any],
         start_time: float
     ) -> Dict[str, Any]:
-        """Parse AI response into structured summary format."""
-        # Simple parsing - could be enhanced with more sophisticated extraction
-        lines = response_text.strip().split('\n')
+        """
+        Parse AI response into structured summary format.
         
-        summary = ""
+        The AI generates full Markdown text. We extract sections for backward 
+        compatibility but return the full markdown in 'summary' field.
+        """
+        import re
+        
+        # Clean up any markdown code fences if present
+        response_text = response_text.strip()
+        response_text = re.sub(r'^```markdown\s*', '', response_text, flags=re.IGNORECASE)
+        response_text = re.sub(r'\s*```$', '', response_text)
+        response_text = response_text.strip()
+        
         insights = []
         recommendations = []
         
-        current_section = "summary"
+        # Try to extract key insights section (look for bullet points under relevant headers)
+        insights_match = re.search(
+            r'###?\s*(?:Key\s+)?(?:Insights?|Findings?|Highlights?)[:\s]*\n((?:[-*•]\s*.+\n?)+)',
+            response_text,
+            re.IGNORECASE | re.MULTILINE
+        )
+        if insights_match:
+            insight_text = insights_match.group(1)
+            insights = [
+                line.strip().lstrip('•-*').strip()
+                for line in insight_text.split('\n')
+                if line.strip() and line.strip().startswith(('•', '-', '*'))
+            ]
         
-        for line in lines:
-            line = line.strip()
-            if not line:
-                continue
-            
-            lower_line = line.lower()
-            if "insight" in lower_line or "key finding" in lower_line:
-                current_section = "insights"
-                continue
-            elif "recommendation" in lower_line or "action" in lower_line:
-                current_section = "recommendations"
-                continue
-            
-            # Remove bullet points and numbering
-            clean_line = line.lstrip('•-*123456789.').strip()
-            if not clean_line:
-                continue
-            
-            if current_section == "summary":
-                summary += clean_line + " "
-            elif current_section == "insights":
-                insights.append(clean_line)
-            elif current_section == "recommendations":
-                recommendations.append(clean_line)
+        # Try to extract recommendations section
+        rec_match = re.search(
+            r'###?\s*(?:Recommendations?|Action\s+Items?)[:\s]*\n((?:[-*•]\s*.+\n?)+)',
+            response_text,
+            re.IGNORECASE | re.MULTILINE
+        )
+        if rec_match:
+            rec_text = rec_match.group(1)
+            recommendations = [
+                line.strip().lstrip('•-*').strip()
+                for line in rec_text.split('\n')
+                if line.strip() and line.strip().startswith(('•', '-', '*'))
+            ]
+        
+        # Fallback: extract any bullet points from the whole text if sections not found
+        if not insights:
+            # Get first 5 bullet points
+            all_bullets = re.findall(r'^[-*•]\s*(.+)$', response_text, re.MULTILINE)
+            insights = all_bullets[:5] if all_bullets else ["Analysis complete - review individual calls for details"]
+        
+        if not recommendations:
+            # Look for numbered lists which often contain recommendations
+            numbered = re.findall(r'^\d+\.\s*(.+)$', response_text, re.MULTILINE)
+            recommendations = numbered[-3:] if len(numbered) >= 3 else numbered
+            if not recommendations:
+                recommendations = ["Continue monitoring call quality"]
         
         return {
-            "summary": summary.strip() or f"Analysis of {data.get('call_count', 0)} calls completed.",
-            "key_insights": insights[:5] if insights else ["Analysis complete - review individual calls for details"],
-            "recommendations": recommendations[:3] if recommendations else ["Continue monitoring call quality"],
+            "summary": response_text,  # Return full markdown text
+            "key_insights": insights[:5],
+            "recommendations": recommendations[:5],
             "metrics": data,
             "processing_time": time.time() - start_time,
             "model": self.settings.chat_model,

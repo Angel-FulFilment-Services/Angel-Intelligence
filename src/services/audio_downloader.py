@@ -248,6 +248,8 @@ class AudioDownloader:
             temp_file.close()
             wav_path = temp_file.name
         
+        # Try SoX first, fallback to ffmpeg
+        sox_error = None
         try:
             # Use SoX for conversion
             # GSM is 8kHz mono, we convert to 32-bit WAV
@@ -270,32 +272,36 @@ class AudioDownloader:
             logger.info(f"Converted GSM to WAV: {gsm_path} -> {wav_path}")
             return wav_path
             
-        except subprocess.CalledProcessError as e:
-            logger.error(f"SoX conversion failed: {e.stderr}")
-            
-            # Try ffmpeg as fallback
-            try:
-                cmd = [
-                    'ffmpeg',
-                    '-y',
-                    '-i', gsm_path,
-                    '-ar', '16000',
-                    '-ac', '1',
-                    '-f', 'wav',
-                    wav_path
-                ]
-                
-                subprocess.run(cmd, capture_output=True, check=True)
-                logger.info(f"Converted GSM to WAV using ffmpeg: {gsm_path} -> {wav_path}")
-                return wav_path
-                
-            except subprocess.CalledProcessError as e2:
-                logger.error(f"ffmpeg conversion also failed: {e2}")
-                raise RuntimeError(f"Failed to convert GSM to WAV: {e.stderr}")
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            sox_error = e
+            if isinstance(e, subprocess.CalledProcessError):
+                logger.debug(f"SoX conversion failed: {e.stderr}")
+            else:
+                logger.debug(f"SoX not found, trying ffmpeg")
         
+        # Try ffmpeg as fallback
+        try:
+            cmd = [
+                'ffmpeg',
+                '-y',
+                '-i', gsm_path,
+                '-ar', '16000',
+                '-ac', '1',
+                '-f', 'wav',
+                wav_path
+            ]
+            
+            subprocess.run(cmd, capture_output=True, check=True)
+            logger.info(f"Converted GSM to WAV using ffmpeg: {gsm_path} -> {wav_path}")
+            return wav_path
+            
+        except subprocess.CalledProcessError as e:
+            logger.error(f"ffmpeg conversion failed: {e.stderr}")
+            raise RuntimeError(f"Failed to convert GSM to WAV with both sox and ffmpeg. Last error: {e.stderr}")
         except FileNotFoundError:
-            logger.error("SoX not found. Please install SoX: apt-get install sox libsox-fmt-all")
-            raise
+            error_msg = "Audio conversion tool (SoX or ffmpeg) not found. Please install ffmpeg."
+            logger.error(error_msg)
+            raise FileNotFoundError(error_msg)
     
     def upload_to_r2(self, local_path: str, r2_path: str, bucket: Optional[str] = None) -> str:
         """

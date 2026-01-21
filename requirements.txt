@@ -19,6 +19,7 @@ httpx>=0.25.0  # HTTP client for service proxying
 numpy>=2.0.2
 torch>=2.6.0
 torchaudio>=2.6.0
+torchvision>=0.21.0
 --extra-index-url https://download.pytorch.org/whl/cu124
 
 # ------------------------------------------------------------------------------
