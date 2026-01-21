@@ -51,6 +51,14 @@ try:
 except ImportError:
     SOUNDFILE_AVAILABLE = False
 
+# JSON repair for LLM outputs
+try:
+    from json_repair import repair_json
+    JSON_REPAIR_AVAILABLE = True
+except ImportError:
+    JSON_REPAIR_AVAILABLE = False
+    logger.warning("json-repair not available - install with: pip install json-repair")
+
 
 # British English system prompt for all analysis
 BRITISH_ENGLISH_INSTRUCTION = """
@@ -752,38 +760,83 @@ ANALYSIS GUIDANCE:
 - Flag any compliance issues: GDPR, payment security, misleading information, rudeness
 - Identify: rushing, interrupting, poor listening, weak objection handling, unclear explanations, lack of empathy, missed upsell opportunities
 
-Return ONLY valid JSON. No text before or after the JSON object."""
+ARRAY LIMITS (do not exceed):
+- key_topics: maximum 5 items
+- agent_actions_performed: maximum 8 items
+- action_items: maximum 5 items
+- compliance_flags: maximum 5 items
+- improvement_areas: maximum 5 items
+
+CRITICAL RULES:
+- Each array item must be unique - DO NOT repeat yourself
+- Return ONLY valid JSON - no text before or after the JSON object
+- Stop generating immediately after the final closing brace"""
     
     def _build_simple_analysis_prompt(self, transcript: str, topic_list: str, rubric_list: str) -> str:
-        """Simplified prompt for smaller models (3B-7B)."""
-        return f"""Analyse this charity call transcript.
+        """Simplified prompt for smaller models (3B-7B) - outputs full structure."""
+        return f"""You are a call quality analyst. Analyse this charity supporter call transcript.
 
 TRANSCRIPT:
 {transcript}
 
-Return JSON with these EXACT field names (copy exactly):
+Return your analysis as valid JSON matching this EXACT structure:
 
 {{
-    "summary": "Brief 2 sentence description of what happened in the call",
+    "summary": "2-3 sentence summary describing what happened in the call, its purpose and outcome",
     "sentiment_score": 5,
     "quality_score": 75,
-    "key_topics": ["Gift Aid", "Donation"],
-    "performance_scores": {{"Empathy": 7, "Clarity": 7, "Listening": 7}},
-    "improvement_areas": ["Could explain Gift Aid more clearly"],
-    "compliance_issues": []
+    "key_topics": [
+        {{"name": "Regular giving", "confidence": 0.9}},
+        {{"name": "Gift Aid", "confidence": 0.8}}
+    ],
+    "agent_actions_performed": [
+        {{"action": "Greeted supporter", "timestamp_start": 0.0, "quality": 4}},
+        {{"action": "Verified identity", "timestamp_start": 15.0, "quality": 4}}
+    ],
+    "performance_scores": {{
+        "Empathy": 7,
+        "Clarity": 7,
+        "Listening": 7,
+        "Script_adherence": 7,
+        "Product_knowledge": 7,
+        "Rapport_building": 7,
+        "Objection_handling": 7,
+        "Closing_effectiveness": 7
+    }},
+    "action_items": [
+        {{"description": "Send confirmation email", "priority": "high"}}
+    ],
+    "compliance_flags": [
+        {{"type": "data_protection", "issue": "Description of issue", "severity": "low"}}
+    ],
+    "improvement_areas": [
+        {{
+            "area": "Skill name",
+            "description": "What needs improvement and how",
+            "priority": "medium",
+            "examples": ["Quote from transcript"]
+        }}
+    ]
 }}
 
-IMPORTANT - Use these EXACT field names:
-- "summary" (not "summarized" or "Summary")
-- "sentiment_score" (not "sentivity_score")
-- "quality_score" (not "Quality_Score")
-- "key_topics" (not "Key_Topics")
-- "performance_scores" (not "Performance_Scores")
-- "improvement_areas" (not "Improvement_Areas")
-- "compliance_issues" (not "Compliance_Issues")
+SCORING GUIDE:
+- sentiment_score: -10 (hostile) to +10 (very friendly), 0 is neutral
+- quality_score: 0-100 (most calls score 60-85)
+- confidence: 0.0 to 1.0
+- performance scores: 1-10 for each criterion
+- quality (for actions): 1-5
 
-All field names must be lowercase with underscores.
-Return ONLY the JSON object, nothing else."""
+TOPICS TO IDENTIFY: {topic_list}
+PERFORMANCE CRITERIA: {rubric_list}
+
+CRITICAL RULES:
+1. Use lowercase field names with underscores exactly as shown
+2. Include empty arrays [] if no items found (don't omit fields)
+3. MAXIMUM array sizes: key_topics (3), agent_actions_performed (5), action_items (3), compliance_flags (2), improvement_areas (3)
+4. DO NOT repeat yourself - each item in an array must be unique
+5. Keep descriptions concise - one sentence maximum
+6. Return ONLY the JSON object, no text before or after
+7. Stop generating after the final closing brace"""
     
     def _generate_text_response(self, prompt: str) -> str:
         """Generate text response from model."""
@@ -831,6 +884,12 @@ Return ONLY the JSON object, nothing else."""
             end = response.rfind('}')
             if start != -1 and end != -1:
                 json_str = response[start:end+1]
+                # Use json_repair if available
+                if JSON_REPAIR_AVAILABLE:
+                    try:
+                        json_str = repair_json(json_str)
+                    except Exception:
+                        pass  # Fall through to regular parsing
                 return json.loads(json_str)
         except json.JSONDecodeError as e:
             logger.warning(f"JSON parsing failed: {e}")
@@ -850,13 +909,28 @@ Return ONLY the JSON object, nothing else."""
             if start != -1 and end != -1:
                 json_str = response[start:end+1]
                 
-                # Clean up common LLM JSON formatting issues
-                json_str = self._clean_json_response(json_str)
-                
-                # Dump full JSON for debugging (after cleaning)
-                logger.info(f"=== CLEANED JSON RESPONSE ===\n{json_str}\n=== END JSON ===")
+                # Use json_repair if available (handles most LLM JSON issues)
+                if JSON_REPAIR_AVAILABLE:
+                    try:
+                        json_str = repair_json(json_str)
+                        logger.debug("JSON repaired successfully with json_repair")
+                    except Exception as e:
+                        logger.warning(f"json_repair failed: {e}, falling back to manual cleaning")
+                        json_str = self._clean_json_response(json_str)
+                else:
+                    # Fallback to manual cleaning if json_repair not installed
+                    json_str = self._clean_json_response(json_str)
                 
                 parsed = json.loads(json_str)
+                
+                # Handle case where model output an array instead of object
+                if isinstance(parsed, list):
+                    logger.warning(f"Model returned array with {len(parsed)} items instead of object, taking first item")
+                    if parsed and isinstance(parsed[0], dict):
+                        parsed = parsed[0]
+                    else:
+                        logger.error("Array does not contain valid object, falling back")
+                        return self._fallback_parse_response(response, speaker_metrics)
                 
                 # Fix performance_scores if model used wrong structure
                 perf_scores = parsed.get("performance_scores", {})
@@ -867,11 +941,11 @@ Return ONLY the JSON object, nothing else."""
                 
                 # Ensure all required fields with correct naming
                 result = {
-                    "summary": parsed.get("summary", "Analysis completed"),
+                    "summary": parsed.get("summary", parsed.get("summarized", "Analysis completed")),
                     "sentiment_score": self._extract_number(parsed.get("sentiment_score", 0)),
-                    "quality_score": self._extract_number(parsed.get("quality_score", 50)),
-                    "key_topics": parsed.get("key_topics", []),
-                    "agent_actions_performed": parsed.get("agent_actions_performed", parsed.get("agent_actions", [])),
+                    "quality_score": self._extract_number(parsed.get("quality_score", parsed.get("quality_scor", 50))),
+                    "key_topics": parsed.get("key_topics", parsed.get("key_topic", [])),
+                    "agent_actions_performed": parsed.get("agent_actions_performed", parsed.get("agent_action", [])),
                     "performance_scores": perf_scores,
                     "action_items": parsed.get("action_items", []),
                     "compliance_flags": parsed.get("compliance_flags", []),
@@ -882,11 +956,10 @@ Return ONLY the JSON object, nothing else."""
                 logger.info(f"Parsed analysis: summary='{result['summary'][:50]}...', quality={result['quality_score']}")
                 return result
             else:
-                logger.warning(f"No JSON found in response. Full response:\n{response}")
+                logger.warning("No JSON object found in model response")
                 
         except json.JSONDecodeError as e:
             logger.warning(f"JSON parsing failed: {e}. Attempting fallback extraction.")
-            logger.info(f"=== CLEANED JSON THAT FAILED ===\n{json_str}\n=== END ===")
             # Try to extract what we can from partial/malformed JSON
             return self._fallback_parse_response(response, speaker_metrics)
         

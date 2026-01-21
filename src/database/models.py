@@ -118,7 +118,7 @@ class CallRecording:
                     WHEN 'pending' THEN 1 
                     ELSE 2 
                 END,
-                created_at ASC
+                id ASC
             LIMIT %s
         """, (limit,))
         return [CallRecording.from_row(row) for row in rows]
