@@ -118,6 +118,13 @@ spec:
               name: angel-intelligence-secrets
               key: r2-bucket
 
+        # HuggingFace token for pyannote speaker diarization
+        - name: HUGGINGFACE_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: huggingface-token
+
         # Processing settings from ConfigMap
         - name: POLL_INTERVAL
           valueFrom:
