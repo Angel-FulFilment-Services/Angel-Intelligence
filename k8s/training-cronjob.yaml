@@ -1,0 +1,144 @@
+# Nightly Training CronJob
+# Runs at 2 AM each night to fine-tune the analysis model on new annotations
+#
+# Prerequisites:
+# - Annotations in ai_call_annotations table
+# - NFS share mounted at /models
+# - GPU available for training
+#
+# Usage: kubectl apply -f training-cronjob.yaml
+
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: angel-intelligence-training
+  namespace: default
+  labels:
+    app: angel-intelligence
+    component: training
+spec:
+  # Run at 2 AM every night
+  schedule: "0 2 * * *"
+  
+  # Don't run concurrent training jobs
+  concurrencyPolicy: Forbid
+  
+  # Keep last 3 job histories
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  
+  # Allow 30 min delay if cluster is busy
+  startingDeadlineSeconds: 1800
+  
+  jobTemplate:
+    spec:
+      # Timeout after 4 hours
+      activeDeadlineSeconds: 14400
+      
+      # Don't retry on failure
+      backoffLimit: 0
+      
+      template:
+        metadata:
+          labels:
+            app: angel-intelligence
+            component: training
+        spec:
+          restartPolicy: Never
+          
+          containers:
+            - name: trainer
+              image: angel-intelligence:latest
+              imagePullPolicy: IfNotPresent
+              
+              # Run the training script
+              command: ["python", "-m", "src.services.trainer"]
+              
+              env:
+                # Database connection
+                - name: AI_DB_HOST
+                  valueFrom:
+                    secretKeyRef:
+                      name: angel-intelligence-secrets
+                      key: db-host
+                - name: AI_DB_PORT
+                  valueFrom:
+                    secretKeyRef:
+                      name: angel-intelligence-secrets
+                      key: db-port
+                - name: AI_DB_DATABASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: angel-intelligence-secrets
+                      key: db-database
+                - name: AI_DB_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: angel-intelligence-secrets
+                      key: db-username
+                - name: AI_DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: angel-intelligence-secrets
+                      key: db-password
+                
+                # HuggingFace token
+                - name: HUGGINGFACE_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: angel-intelligence-secrets
+                      key: huggingface-token
+                
+                # Model configuration
+                - name: ANALYSIS_MODEL
+                  valueFrom:
+                    configMapKeyRef:
+                      name: angel-intelligence-thor-config
+                      key: analysis-model
+                - name: ANALYSIS_MODEL_PATH
+                  valueFrom:
+                    configMapKeyRef:
+                      name: angel-intelligence-thor-config
+                      key: analysis-model-path
+                - name: MODELS_BASE_PATH
+                  value: "/models"
+                
+                # Training environment
+                - name: CUDA_VISIBLE_DEVICES
+                  value: "0"
+                - name: TRANSFORMERS_CACHE
+                  value: "/models/.cache"
+                - name: HF_HOME
+                  value: "/models/.cache"
+              
+              resources:
+                requests:
+                  memory: "32Gi"
+                  cpu: "4"
+                  nvidia.com/gpu: "1"
+                limits:
+                  memory: "64Gi"
+                  cpu: "8"
+                  nvidia.com/gpu: "1"
+              
+              volumeMounts:
+                - name: models
+                  mountPath: /models
+          
+          volumes:
+            - name: models
+              persistentVolumeClaim:
+                claimName: angel-intelligence-thor-models
+          
+          # Prefer Thor nodes for training
+          nodeSelector:
+            nvidia.com/gpu.present: "true"
+          
+          tolerations:
+            - key: nvidia.com/gpu
+              operator: Exists
+              effect: NoSchedule
+
+---
+# Manual training job (for one-off runs)
+# kubectl create job --from=cronjob/angel-intelligence-training manual-training-$(date +%Y%m%d)

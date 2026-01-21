@@ -38,6 +38,14 @@ except ImportError:
     TEXT_MODEL_AVAILABLE = False
     logger.warning("transformers AutoModelForCausalLM not available")
 
+# LoRA adapter support (for fine-tuned models)
+try:
+    from peft import PeftModel
+    PEFT_AVAILABLE = True
+except ImportError:
+    PEFT_AVAILABLE = False
+    logger.debug("peft not available - fine-tuned adapters will not be loaded")
+
 try:
     from qwen_omni_utils import process_mm_info
     QWEN_OMNI_UTILS_AVAILABLE = True
@@ -105,7 +113,14 @@ class AnalysisService:
         # Set to 0 for unlimited (recommended for 14B+ models)
         self.max_transcript_length = getattr(settings, 'max_transcript_length', 0)
         
-        # Models (lazy loaded)
+        # External LLM API (vLLM/TGI) - when set, uses API instead of local models
+        self.llm_api_url = getattr(settings, 'llm_api_url', '') or ''
+        self.llm_api_key = getattr(settings, 'llm_api_key', '') or ''
+        
+        # LoRA adapter name for vLLM (e.g., "call-analysis", "email-analysis")
+        self.analysis_adapter_name = getattr(settings, 'analysis_adapter_name', 'call-analysis') or 'call-analysis'
+        
+        # Models (lazy loaded) - only used when llm_api_url is not set
         self._analysis_model = None  # Qwen2.5-Omni for audio mode
         self._analysis_processor = None
         self._text_model = None  # Text-only model for transcript mode
@@ -116,7 +131,8 @@ class AnalysisService:
         # Load configuration
         self._config = self._load_config()
         
-        logger.info(f"AnalysisService initialised: mode={self.analysis_mode}, device={self.device}")
+        mode_desc = "vLLM API" if self.llm_api_url else f"local ({self.device})"
+        logger.info(f"AnalysisService initialised: mode={self.analysis_mode}, backend={mode_desc}")
     
     def _load_config(self, config_path: str = "call_analysis_config.json") -> Dict[str, Any]:
         """Load analysis configuration."""
@@ -219,6 +235,10 @@ class AnalysisService:
                     self.analysis_model_path,
                     **load_kwargs
                 )
+                
+                # Load LoRA adapter if available
+                self._text_model = self._load_adapter_if_available(self._text_model)
+                
             except Exception as e:
                 # Fallback to CPU with float32 if quantized loading fails
                 logger.warning(f"Quantized model loading failed: {e}")
@@ -234,8 +254,70 @@ class AnalysisService:
                 )
                 self._text_model = self._text_model.to("cpu")
                 self.device = "cpu"  # Update device for this session
+                
+                # Try to load adapter even on CPU
+                self._text_model = self._load_adapter_if_available(self._text_model)
             
             logger.info(f"Text model loaded on {self.device}")
+    
+    def _load_adapter_if_available(self, model):
+        """
+        Load LoRA adapter if one has been trained.
+        
+        Uses TrainingService to find the current versioned adapter.
+        
+        Args:
+            model: Base model to apply adapter to
+            
+        Returns:
+            Model with adapter applied, or original model if no adapter
+        """
+        if not PEFT_AVAILABLE:
+            return model
+        
+        from pathlib import Path
+        
+        # Use TrainingService to get the current adapter path (supports versioning)
+        try:
+            from src.services.trainer import TrainingService
+            adapter_name = getattr(self.settings, 'analysis_adapter_name', 'call-analysis')
+            trainer = TrainingService(adapter_name=adapter_name)
+            adapter_path = trainer.get_current_adapter_path()
+            
+            if adapter_path is None:
+                logger.debug("No trained adapter found, using base model")
+                return model
+                
+        except ImportError:
+            # Fallback to legacy path if TrainingService not available
+            adapter_path = Path(self.settings.models_base_path) / "adapters" / "call-analysis"
+            if not (adapter_path / "adapter_config.json").exists():
+                logger.debug("No trained adapter found, using base model")
+                return model
+        
+        adapter_config = adapter_path / "adapter_config.json"
+        if not adapter_config.exists():
+            logger.debug("No trained adapter found, using base model")
+            return model
+        
+        try:
+            logger.info(f"Loading LoRA adapter from {adapter_path}")
+            model = PeftModel.from_pretrained(model, str(adapter_path))
+            
+            # Log adapter info
+            metadata_path = adapter_path / "training_metadata.json"
+            if metadata_path.exists():
+                import json
+                with open(metadata_path) as f:
+                    metadata = json.load(f)
+                version = metadata.get('version', 'unknown')
+                logger.info(f"Adapter version '{version}' trained at {metadata.get('trained_at')} with {metadata.get('samples_used')} samples")
+            
+            return model
+            
+        except Exception as e:
+            logger.warning(f"Failed to load adapter: {e}. Using base model.")
+            return model
     
     def analyse(
         self, 
@@ -387,22 +469,24 @@ class AnalysisService:
         speaker_metrics: Dict[str, Any],
         start_time: float
     ) -> Dict[str, Any]:
-        """Analyse call using transcript text only (with text-only model)."""
+        """Analyse call using transcript text only (with text-only model or API)."""
         try:
-            self._ensure_text_model_loaded()
+            # Only load local model if not using external API
+            if not self.llm_api_url:
+                self._ensure_text_model_loaded()
             
             full_text = transcript.get("full_transcript", "")
             
             # Build prompt
             prompt = self._build_transcript_analysis_prompt(full_text)
             
-            # Generate analysis using text-only model
+            # Generate analysis using text-only model or API
             response = self._generate_text_only_response(prompt)
             
             # Parse response
             result = self._parse_analysis_response(response, speaker_metrics)
             result["processing_time"] = time.time() - start_time
-            result["analysis_type"] = "transcript"
+            result["analysis_type"] = "transcript_api" if self.llm_api_url else "transcript"
             
             return result
             
@@ -410,8 +494,9 @@ class AnalysisService:
             logger.error(f"Transcript analysis failed: {e}", exc_info=True)
             return self._empty_analysis(speaker_metrics, start_time)
         finally:
-            # Free GPU memory for next recording's transcription
-            self._unload_text_model()
+            # Free GPU memory for next recording's transcription (only if using local model)
+            if not self.llm_api_url:
+                self._unload_text_model()
     
     def _unload_text_model(self) -> None:
         """Unload text model to free GPU memory."""
@@ -428,7 +513,94 @@ class AnalysisService:
                 torch.cuda.empty_cache()
     
     def _generate_text_only_response(self, prompt: str) -> str:
-        """Generate text response using the text-only model."""
+        """Generate text response using the text-only model or external API."""
+        # Use external vLLM API if configured
+        if self.llm_api_url:
+            return self._generate_via_api(prompt, adapter_name=self.analysis_adapter_name)
+        
+        # Otherwise use local model
+        return self._generate_via_local_model(prompt)
+    
+    def _generate_via_api(self, prompt: str, adapter_name: Optional[str] = "call-analysis") -> str:
+        """
+        Generate text response using external LLM API (vLLM/TGI).
+        
+        Args:
+            prompt: The prompt to send
+            adapter_name: LoRA adapter name to use (default: "call-analysis")
+                         Set to None to use base model without adapter
+        """
+        import httpx
+        
+        messages = [
+            {"role": "user", "content": prompt}
+        ]
+        
+        headers = {"Content-Type": "application/json"}
+        if self.llm_api_key:
+            headers["Authorization"] = f"Bearer {self.llm_api_key}"
+        
+        # Build model identifier - base model or with adapter
+        model_id = self.settings.analysis_model
+        
+        payload = {
+            "model": model_id,
+            "messages": messages,
+            "max_tokens": 2000,
+            "temperature": 0,  # Deterministic for structured output
+            "repetition_penalty": 1.1,
+        }
+        
+        # Add LoRA adapter if specified and available
+        if adapter_name:
+            # Get the versioned adapter path from TrainingService
+            adapter_path = f"/models/adapters/{adapter_name}"
+            try:
+                from src.services.trainer import TrainingService
+                trainer = TrainingService(adapter_name=adapter_name)
+                current_version = trainer.get_current_version_name()
+                if current_version:
+                    adapter_path = f"/models/adapters/{adapter_name}/{current_version}"
+            except Exception as e:
+                logger.debug(f"Could not get versioned adapter path: {e}")
+            
+            # vLLM LoRA format: specify adapter in extra_body
+            payload["extra_body"] = {
+                "lora_request": {
+                    "lora_name": adapter_name,
+                    "lora_path": adapter_path,
+                }
+            }
+        
+        try:
+            # Use longer timeout for large model inference
+            with httpx.Client(timeout=300.0) as client:
+                response = client.post(
+                    f"{self.llm_api_url}/chat/completions",
+                    json=payload,
+                    headers=headers
+                )
+                response.raise_for_status()
+                
+            result = response.json()
+            content = result["choices"][0]["message"]["content"]
+            
+            logger.debug(f"API response (first 500 chars): {content[:500]}")
+            return content
+            
+        except httpx.HTTPStatusError as e:
+            # If adapter not found, retry without adapter
+            if e.response.status_code == 400 and adapter_name:
+                logger.warning(f"LoRA adapter '{adapter_name}' not found, falling back to base model")
+                return self._generate_via_api(prompt, adapter_name=None)
+            logger.error(f"LLM API error: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"LLM API request failed: {e}")
+            raise
+    
+    def _generate_via_local_model(self, prompt: str) -> str:
+        """Generate text response using locally loaded model."""
         messages = [
             {"role": "user", "content": prompt}
         ]

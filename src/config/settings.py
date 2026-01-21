@@ -82,6 +82,15 @@ class Settings(BaseSettings):
     chat_model_path: str = Field(default="", description="Local path for chat model")
     chat_model_quantization: str = Field(default="", description="Quantization for chat model")
     
+    # vLLM/External API support (optional - for shared model serving)
+    # When set, uses HTTP API instead of loading models locally
+    # Format: http://vllm-server:8000/v1 (OpenAI-compatible endpoint)
+    llm_api_url: str = Field(default="", description="External LLM API URL (vLLM/TGI). When set, uses API for both analysis and chat")
+    llm_api_key: str = Field(default="", description="API key for external LLM service (if required)")
+    
+    # LoRA adapter configuration (for fine-tuned models via vLLM)
+    analysis_adapter_name: str = Field(default="call-analysis", description="LoRA adapter name for analysis (folder name under /models/adapters/)")
+    
     # Analysis mode
     analysis_mode: str = Field(default="audio", description="Analysis mode: 'audio' or 'transcript'")
     

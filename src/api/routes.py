@@ -10,7 +10,7 @@ import os
 from datetime import datetime
 from typing import Optional, List, Dict
 
-from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query
+from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks
 from pydantic import BaseModel, Field
 
 from src.api.auth import verify_token
@@ -1422,6 +1422,9 @@ async def import_training_data(request: TrainingImportRequest):
     """
     Import training data and optionally trigger fine-tuning.
     
+    Note: This endpoint is for importing external data. The primary training
+    flow uses annotations from ai_call_annotations via the nightly CronJob.
+    
     Only the call_analysis model supports fine-tuning.
     The chat model uses base training only.
     """
@@ -1439,16 +1442,288 @@ async def import_training_data(request: TrainingImportRequest):
     # Generate job ID
     job_id = f"training_{uuid.uuid4().hex[:12]}"
     
-    # TODO: Implement actual training pipeline
-    # For now, just acknowledge the request
-    logger.info(f"Training job {job_id}: Received {len(request.training_data)} training samples")
+    # Log the import - actual training runs via nightly CronJob using database annotations
+    # This endpoint is primarily for data import, not triggering training
+    logger.info(f"Training data import {job_id}: Received {len(request.training_data)} samples")
+    
+    # Import data into ai_call_annotations if needed
+    # For now, just acknowledge - training uses existing annotations from the UI
     
     return TrainingImportResponse(
         success=True,
         job_id=job_id,
-        status="queued",
-        message=f"Training job queued with {len(request.training_data)} samples. Fine-tuning pipeline not yet implemented."
+        status="acknowledged",
+        message=f"Received {len(request.training_data)} samples. Training runs nightly at 2 AM using annotations from ai_call_annotations table. Use the UI to create annotations, or POST to /api/annotations."
     )
+
+
+class TrainingStatusResponse(BaseModel):
+    """Response with training status."""
+    adapter_exists: bool
+    adapter_name: str
+    current_version: Optional[str] = None
+    trained_at: Optional[str] = None
+    samples_used: Optional[int] = None
+    training_loss: Optional[float] = None
+    base_model: Optional[str] = None
+    new_annotations_since_training: int = 0
+    ready_for_training: bool = False
+    ready_reason: str = ""
+    available_versions: List[Dict[str, Any]] = []
+
+
+@router.get(
+    "/api/training/status",
+    response_model=TrainingStatusResponse,
+    dependencies=[Depends(verify_token)]
+)
+async def get_training_status(
+    adapter_name: str = Query(default="call-analysis", description="Adapter name to check")
+):
+    """
+    Get current training/adapter status.
+    
+    Shows when the adapter was last trained and if new annotations are available.
+    Includes list of all available versions for rollback.
+    """
+    from src.services.trainer import TrainingService
+    
+    try:
+        trainer = TrainingService(adapter_name=adapter_name)
+        metadata = trainer.get_adapter_info()
+        new_count = trainer.count_new_annotations()
+        should_train, reason = trainer.should_train(min_new_annotations=1)
+        versions = trainer.list_versions()
+        current_version = trainer.get_current_version_name()
+        
+        if metadata:
+            return TrainingStatusResponse(
+                adapter_exists=True,
+                adapter_name=adapter_name,
+                current_version=current_version,
+                trained_at=metadata.get("trained_at"),
+                samples_used=metadata.get("samples_used"),
+                training_loss=metadata.get("training_loss"),
+                base_model=metadata.get("base_model"),
+                new_annotations_since_training=new_count,
+                ready_for_training=should_train,
+                ready_reason=reason,
+                available_versions=versions,
+            )
+        else:
+            return TrainingStatusResponse(
+                adapter_exists=False,
+                adapter_name=adapter_name,
+                new_annotations_since_training=new_count,
+                ready_for_training=should_train,
+                ready_reason=reason,
+                available_versions=versions,
+            )
+    except Exception as e:
+        logger.error(f"Failed to get training status: {e}")
+        return TrainingStatusResponse(
+            adapter_exists=False,
+            adapter_name=adapter_name,
+            ready_reason=f"Error: {str(e)}",
+        )
+
+
+class TrainingTriggerRequest(BaseModel):
+    """Request to trigger training."""
+    adapter_name: str = "call-analysis"
+    force: bool = False  # If True, train even if no new annotations
+    max_samples: int = 2500
+    epochs: int = 3
+
+
+class TrainingTriggerResponse(BaseModel):
+    """Response from training trigger."""
+    success: bool
+    message: str
+    adapter_name: Optional[str] = None
+    version: Optional[str] = None  # New versioned name
+    samples_used: Optional[int] = None
+    training_loss: Optional[float] = None
+    training_time_minutes: Optional[float] = None
+    error: Optional[str] = None
+
+
+@router.post(
+    "/api/training/start",
+    response_model=TrainingTriggerResponse,
+    dependencies=[Depends(verify_token)]
+)
+async def trigger_training(request: TrainingTriggerRequest, background_tasks: BackgroundTasks):
+    """
+    Trigger model fine-tuning immediately.
+    
+    This runs training synchronously and may take 30-60+ minutes.
+    For production, use the nightly CronJob instead.
+    
+    Set force=true to train even if there are no new annotations.
+    """
+    from src.services.trainer import TrainingService, TRAINING_AVAILABLE
+    
+    if not TRAINING_AVAILABLE:
+        return TrainingTriggerResponse(
+            success=False,
+            message="Training dependencies not installed",
+            error="Install peft and datasets: pip install peft datasets"
+        )
+    
+    try:
+        trainer = TrainingService(adapter_name=request.adapter_name)
+        
+        # Check if training is needed
+        if not request.force:
+            should_train, reason = trainer.should_train(min_new_annotations=1)
+            if not should_train:
+                return TrainingTriggerResponse(
+                    success=False,
+                    message=f"Training skipped: {reason}",
+                    adapter_name=request.adapter_name,
+                )
+        
+        logger.info(f"Starting training for adapter '{request.adapter_name}' (force={request.force})")
+        
+        # Run training (this blocks - may take a long time)
+        result = trainer.train(
+            max_samples=request.max_samples,
+            epochs=request.epochs,
+        )
+        
+        if result["success"]:
+            return TrainingTriggerResponse(
+                success=True,
+                message="Training completed successfully",
+                adapter_name=result.get("adapter_name"),
+                version=result.get("version"),
+                samples_used=result.get("samples_used"),
+                training_loss=result.get("training_loss"),
+                training_time_minutes=result.get("training_time_minutes"),
+            )
+        else:
+            return TrainingTriggerResponse(
+                success=False,
+                message="Training failed",
+                adapter_name=request.adapter_name,
+                error=result.get("error"),
+            )
+            
+    except Exception as e:
+        logger.exception(f"Training failed: {e}")
+        return TrainingTriggerResponse(
+            success=False,
+            message="Training failed with exception",
+            adapter_name=request.adapter_name,
+            error=str(e),
+        )
+
+
+class PromoteVersionRequest(BaseModel):
+    """Request to promote an adapter version."""
+    adapter_name: str = "call-analysis"
+    version: str  # Version name to promote (e.g., "call-analysis-20260121-0200")
+
+
+class PromoteVersionResponse(BaseModel):
+    """Response from promoting a version."""
+    success: bool
+    message: str
+    adapter_name: str
+    version: str
+
+
+@router.post(
+    "/api/training/promote",
+    response_model=PromoteVersionResponse,
+    dependencies=[Depends(verify_token)]
+)
+async def promote_adapter_version(request: PromoteVersionRequest):
+    """
+    Promote a specific adapter version to be the current active version.
+    
+    Use this for:
+    - Zero-downtime switchover after training completes
+    - Rolling back to a previous version if issues are detected
+    
+    Note: After promoting, you may need to restart vLLM or update ANALYSIS_ADAPTER_NAME
+    in the ConfigMap to point to the new version for it to take effect.
+    """
+    from src.services.trainer import TrainingService
+    
+    try:
+        trainer = TrainingService(adapter_name=request.adapter_name)
+        
+        success = trainer.promote_version(request.version)
+        
+        if success:
+            return PromoteVersionResponse(
+                success=True,
+                message=f"Version '{request.version}' is now the current active adapter",
+                adapter_name=request.adapter_name,
+                version=request.version,
+            )
+        else:
+            return PromoteVersionResponse(
+                success=False,
+                message=f"Version '{request.version}' not found",
+                adapter_name=request.adapter_name,
+                version=request.version,
+            )
+    except Exception as e:
+        logger.error(f"Failed to promote version: {e}")
+        return PromoteVersionResponse(
+            success=False,
+            message=f"Error: {str(e)}",
+            adapter_name=request.adapter_name,
+            version=request.version,
+        )
+
+
+class CleanupVersionsRequest(BaseModel):
+    """Request to cleanup old adapter versions."""
+    adapter_name: str = "call-analysis"
+    keep: int = 5  # Number of versions to keep
+
+
+class CleanupVersionsResponse(BaseModel):
+    """Response from cleanup operation."""
+    success: bool
+    message: str
+    versions_removed: int
+
+
+@router.post(
+    "/api/training/cleanup",
+    response_model=CleanupVersionsResponse,
+    dependencies=[Depends(verify_token)]
+)
+async def cleanup_old_versions(request: CleanupVersionsRequest):
+    """
+    Remove old adapter versions, keeping the newest N.
+    
+    The current active version is never removed, even if it's older.
+    This helps manage disk space on the NFS storage.
+    """
+    from src.services.trainer import TrainingService
+    
+    try:
+        trainer = TrainingService(adapter_name=request.adapter_name)
+        removed = trainer.cleanup_old_versions(keep=request.keep)
+        
+        return CleanupVersionsResponse(
+            success=True,
+            message=f"Cleaned up {removed} old version(s), kept newest {request.keep}",
+            versions_removed=removed,
+        )
+    except Exception as e:
+        logger.error(f"Failed to cleanup versions: {e}")
+        return CleanupVersionsResponse(
+            success=False,
+            message=f"Error: {str(e)}",
+            versions_removed=0,
+        )
 
 
 # =============================================================================

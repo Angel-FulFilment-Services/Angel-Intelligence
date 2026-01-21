@@ -1,0 +1,243 @@
+# vLLM Model Server Deployment
+# This runs a shared LLM server that both analysis and interactive services can use
+# Benefits:
+# - Single model load for multiple workers
+# - Better GPU utilization via batching
+# - More workers per GPU
+#
+# Usage: 
+#   1. kubectl apply -f secret.yaml  (must have huggingface-token)
+#   2. kubectl apply -f vllm-deployment.yaml
+#   3. Wait for model to load (~2-5 min)
+#   4. Set llm-api-url in thor-deployment.yaml ConfigMap
+#   5. kubectl apply -f thor-deployment.yaml
+#
+# Requires: NVIDIA GPU with sufficient VRAM (32B INT4 needs ~18GB)
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-config
+  namespace: default
+data:
+  # Model - use AWQ pre-quantized version for vLLM
+  # The base model requires bitsandbytes which vLLM doesn't support
+  MODEL_NAME: "Qwen/Qwen2.5-32B-Instruct-AWQ"
+  
+  # Maximum model length (context window)
+  MAX_MODEL_LEN: "8192"
+  
+  # GPU memory utilization (0.0-1.0)
+  GPU_MEMORY_UTILIZATION: "0.85"
+  
+  # Number of tensor parallel GPUs (set higher if multi-GPU)
+  TENSOR_PARALLEL_SIZE: "1"
+  
+  # Maximum number of sequences to batch
+  MAX_NUM_SEQS: "32"
+  
+  # LoRA configuration
+  # Enable dynamic LoRA adapter loading
+  ENABLE_LORA: "true"
+  MAX_LORAS: "4"
+  MAX_LORA_RANK: "32"
+  
+  # Path to adapters directory (mounted from NFS)
+  LORA_MODULES_PATH: "/models/adapters"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: vllm-model-cache
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 100Gi  # Model cache (32B model is ~35GB compressed)
+  storageClassName: local-path
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-server
+  namespace: default
+  labels:
+    app: vllm-server
+spec:
+  replicas: 1  # Single instance for model serving
+  selector:
+    matchLabels:
+      app: vllm-server
+  strategy:
+    type: Recreate  # Avoid multiple instances during update
+  template:
+    metadata:
+      labels:
+        app: vllm-server
+    spec:
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: HF_HOME
+              value: "/models"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: angel-intelligence-secrets
+                  key: huggingface-token
+            - name: MODEL_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MODEL_NAME
+            - name: MAX_MODEL_LEN
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_MODEL_LEN
+            - name: GPU_MEMORY_UTILIZATION
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: GPU_MEMORY_UTILIZATION
+            - name: TENSOR_PARALLEL_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: TENSOR_PARALLEL_SIZE
+            - name: MAX_NUM_SEQS
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_NUM_SEQS
+            - name: ENABLE_LORA
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: ENABLE_LORA
+            - name: MAX_LORAS
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_LORAS
+            - name: MAX_LORA_RANK
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MAX_LORA_RANK
+            - name: LORA_MODULES_PATH
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: LORA_MODULES_PATH
+          args:
+            - "--model"
+            - "$(MODEL_NAME)"
+            - "--max-model-len"
+            - "$(MAX_MODEL_LEN)"
+            - "--gpu-memory-utilization"
+            - "$(GPU_MEMORY_UTILIZATION)"
+            - "--tensor-parallel-size"
+            - "$(TENSOR_PARALLEL_SIZE)"
+            - "--max-num-seqs"
+            - "$(MAX_NUM_SEQS)"
+            - "--enable-lora"
+            - "--max-loras"
+            - "$(MAX_LORAS)"
+            - "--max-lora-rank"
+            - "$(MAX_LORA_RANK)"
+            - "--trust-remote-code"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models
+            - name: adapters
+              mountPath: /models/adapters
+          resources:
+            requests:
+              memory: "24Gi"
+              cpu: "4"
+              nvidia.com/gpu: "1"
+            limits:
+              memory: "32Gi"
+              cpu: "8"
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120  # Model loading takes time
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30  # Allow 5 minutes for initial load
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: vllm-model-cache
+        # Adapters volume - shared with training job
+        - name: adapters
+          persistentVolumeClaim:
+            claimName: angel-intelligence-thor-models
+      # Prefer nodes with GPU
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-server
+  namespace: default
+spec:
+  selector:
+    app: vllm-server
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
+
+---
+# HorizontalPodAutoscaler - optional for multi-GPU setups
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: vllm-server-hpa
+#   namespace: voice-ai
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: vllm-server
+#   minReplicas: 1
+#   maxReplicas: 2
+#   metrics:
+#     - type: Resource
+#       resource:
+#         name: cpu
+#         target:
+#           type: Utilization
+#           averageUtilization: 80

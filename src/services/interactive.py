@@ -59,13 +59,19 @@ class InteractiveService:
         self.settings = get_settings()
         self.use_mock = self.settings.use_mock_models
         
-        # Model state (lazy loaded)
+        # vLLM/external API configuration
+        self.llm_api_url = self.settings.llm_api_url
+        self.llm_api_key = self.settings.llm_api_key
+        
+        # Model state (lazy loaded - only used if not using API)
         self._model = None
         self._tokenizer = None
         self._device = None
         
         self._initialized = True
-        logger.info(f"InteractiveService initialised (mock={self.use_mock})")
+        
+        mode_desc = "mock" if self.use_mock else ("API" if self.llm_api_url else "local")
+        logger.info(f"InteractiveService initialised (mode={mode_desc})")
     
     def _ensure_model_loaded(self) -> None:
         """Ensure the chat model is loaded."""
@@ -137,6 +143,50 @@ class InteractiveService:
         elapsed = time.time() - start_time
         logger.info(f"Chat model loaded in {elapsed:.1f}s on {self._device}")
     
+    def _generate_via_api(
+        self,
+        messages: List[Dict[str, str]],
+        max_tokens: int = 512,
+        temperature: float = 0.6,
+    ) -> str:
+        """
+        Generate text via external vLLM/OpenAI-compatible API.
+        
+        Args:
+            messages: Chat messages in OpenAI format
+            max_tokens: Maximum tokens to generate
+            temperature: Sampling temperature
+            
+        Returns:
+            Generated text response
+        """
+        import httpx
+        
+        headers = {"Content-Type": "application/json"}
+        if self.llm_api_key:
+            headers["Authorization"] = f"Bearer {self.llm_api_key}"
+        
+        # Use the chat model name for the API request
+        model_name = self.settings.chat_model
+        
+        payload = {
+            "model": model_name,
+            "messages": messages,
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+            "top_p": 0.85,
+            "repetition_penalty": 1.1,
+        }
+        
+        api_endpoint = f"{self.llm_api_url.rstrip('/')}/chat/completions"
+        
+        with httpx.Client(timeout=300.0) as client:
+            response = client.post(api_endpoint, headers=headers, json=payload)
+            response.raise_for_status()
+            result = response.json()
+        
+        return result["choices"][0]["message"]["content"]
+    
     def chat(
         self,
         message: str,
@@ -165,8 +215,6 @@ class InteractiveService:
         
         if self.use_mock:
             return self._mock_chat(message, context)
-        
-        self._ensure_model_loaded()
         
         # Build conversation
         messages = []
@@ -219,32 +267,41 @@ Key guidelines:
         # Add current message
         messages.append({"role": "user", "content": message})
         
-        # Generate response
+        # Generate response - via API or local model
         try:
-            inputs = self._tokenizer.apply_chat_template(
-                messages,
-                return_tensors="pt",
-                add_generation_prompt=True
-            ).to(self._device)
-            
-            with torch.no_grad():
-                outputs = self._model.generate(
-                    inputs,
-                    max_new_tokens=max_tokens,
-                    do_sample=True,
-                    temperature=0.6,  # Reduced for faster, more focused responses
-                    top_p=0.85,        # Reduced for faster generation
-                    pad_token_id=self._tokenizer.eos_token_id,
-                    repetition_penalty=1.1,  # Prevent repetition
-                )
-            
-            # Decode response (only new tokens)
-            response_tokens = outputs[0][inputs.shape[1]:]
-            response_text = self._tokenizer.decode(response_tokens, skip_special_tokens=True)
+            if self.llm_api_url:
+                # Use external vLLM/OpenAI-compatible API
+                response_text = self._generate_via_api(messages, max_tokens=max_tokens)
+                tokens_used = len(response_text.split())  # Approximate
+            else:
+                # Use local model
+                self._ensure_model_loaded()
+                
+                inputs = self._tokenizer.apply_chat_template(
+                    messages,
+                    return_tensors="pt",
+                    add_generation_prompt=True
+                ).to(self._device)
+                
+                with torch.no_grad():
+                    outputs = self._model.generate(
+                        inputs,
+                        max_new_tokens=max_tokens,
+                        do_sample=True,
+                        temperature=0.6,  # Reduced for faster, more focused responses
+                        top_p=0.85,        # Reduced for faster generation
+                        pad_token_id=self._tokenizer.eos_token_id,
+                        repetition_penalty=1.1,  # Prevent repetition
+                    )
+                
+                # Decode response (only new tokens)
+                response_tokens = outputs[0][inputs.shape[1]:]
+                response_text = self._tokenizer.decode(response_tokens, skip_special_tokens=True)
+                tokens_used = len(response_tokens)
             
             return {
                 "response": response_text.strip(),
-                "tokens_used": len(response_tokens),
+                "tokens_used": tokens_used,
                 "processing_time": time.time() - start_time,
                 "model": self.settings.chat_model,
             }
@@ -542,7 +599,8 @@ Is there a specific aspect of the calls you'd like me to analyse further?""",
         """Check if interactive service is available."""
         if self.use_mock:
             return True
-        return QWEN_AVAILABLE
+        # Available if using API or if transformers is installed
+        return bool(self.llm_api_url) or QWEN_AVAILABLE
     
     def chat_with_functions(
         self,
@@ -584,7 +642,9 @@ Is there a specific aspect of the calls you'd like me to analyse further?""",
         if self.use_mock:
             return self._mock_chat_with_functions(message, user_name, filters)
         
-        self._ensure_model_loaded()
+        # Only load local model if not using API
+        if not self.llm_api_url:
+            self._ensure_model_loaded()
         
         # Build messages with SQL Agent system prompt
         messages = []
@@ -601,26 +661,31 @@ Is there a specific aspect of the calls you'd like me to analyse further?""",
         # Function calling loop
         for iteration in range(max_function_calls + 1):
             try:
-                # Generate response
-                inputs = self._tokenizer.apply_chat_template(
-                    messages,
-                    return_tensors="pt",
-                    add_generation_prompt=True
-                ).to(self._device)
-                
-                with torch.no_grad():
-                    outputs = self._model.generate(
-                        inputs,
-                        max_new_tokens=max_tokens,
-                        do_sample=True,
-                        temperature=0.6,
-                        top_p=0.85,
-                        pad_token_id=self._tokenizer.eos_token_id,
-                        repetition_penalty=1.1,
-                    )
-                
-                response_tokens = outputs[0][inputs.shape[1]:]
-                response_text = self._tokenizer.decode(response_tokens, skip_special_tokens=True).strip()
+                # Generate response - via API or local model
+                if self.llm_api_url:
+                    response_text = self._generate_via_api(messages, max_tokens=max_tokens).strip()
+                    response_tokens_count = len(response_text.split())  # Approximate
+                else:
+                    inputs = self._tokenizer.apply_chat_template(
+                        messages,
+                        return_tensors="pt",
+                        add_generation_prompt=True
+                    ).to(self._device)
+                    
+                    with torch.no_grad():
+                        outputs = self._model.generate(
+                            inputs,
+                            max_new_tokens=max_tokens,
+                            do_sample=True,
+                            temperature=0.6,
+                            top_p=0.85,
+                            pad_token_id=self._tokenizer.eos_token_id,
+                            repetition_penalty=1.1,
+                        )
+                    
+                    response_tokens = outputs[0][inputs.shape[1]:]
+                    response_text = self._tokenizer.decode(response_tokens, skip_special_tokens=True).strip()
+                    response_tokens_count = len(response_tokens)
                 
                 # Check if the response contains a function call
                 # Look for patterns like: FUNCTION_CALL: execute_sql_query(...)
@@ -684,7 +749,7 @@ Please try again with a corrected query using ONLY these tables and columns."""
                         logger.warning(f"Too many failed function calls ({failed_calls}), giving up")
                         return {
                             "response": "I'm having trouble querying the database. The queries I tried didn't work - I may have used incorrect table or column names. Could you try rephrasing your question, or ask for something more specific like 'how many calls were completed this month?'",
-                            "tokens_used": len(response_tokens),
+                            "tokens_used": response_tokens_count,
                             "processing_time": time.time() - start_time,
                             "model": self.settings.chat_model,
                             "function_calls": function_calls_made,
@@ -709,7 +774,7 @@ Please try again with a corrected query using ONLY these tables and columns."""
                     
                     return {
                         "response": clean_response,
-                        "tokens_used": len(response_tokens),
+                        "tokens_used": response_tokens_count,
                         "processing_time": time.time() - start_time,
                         "model": self.settings.chat_model,
                         "function_calls": function_calls_made,

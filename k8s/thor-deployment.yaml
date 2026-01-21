@@ -1,0 +1,493 @@
+# ==============================================================================
+# Angel Intelligence - AGX Thor 128GB Kubernetes Deployment
+# ==============================================================================
+# Optimised for NVIDIA AGX Thor nodes with 128GB unified memory
+# Deploys batch workers with high-quality 32B analysis model
+#
+# Two deployment modes:
+# 1. LOCAL MODEL: Each worker loads its own model (simpler, less workers)
+# 2. vLLM SERVER: Shared model server (higher throughput, more workers)
+#
+# For vLLM mode, deploy vllm-deployment.yaml first, then uncomment the 
+# llm-api-url setting below.
+#
+# Prerequisites:
+# - Kubernetes cluster with Thor nodes
+# - NVIDIA device plugin installed
+# - NFS provisioner for shared model storage
+# - Secrets configured (see secret.yaml.example)
+# ==============================================================================
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: angel-intelligence-thor-config
+  namespace: default
+  labels:
+    app: angel-intelligence
+    tier: thor
+data:
+  # Environment
+  angel-env: "production"
+  
+  # Processing Configuration - Thor optimised
+  poll-interval: "10"
+  max-concurrent-jobs: "5"
+  max-retry-attempts: "3"
+  retry-delay-hours: "1"
+  
+  # Analysis mode
+  analysis-mode: "transcript"
+  
+  # Transcription - use large-v3 for best accuracy
+  whisper-model: "large-v3"
+  whisper-model-path: "/models/whisper"
+  transcript-segmentation: "word"
+  
+  # Analysis Model - 32B for high-quality output
+  analysis-model: "Qwen/Qwen2.5-32B-Instruct"
+  analysis-model-path: "/models/analysis"
+  analysis-model-quantization: "int4"
+  
+  # Chat Model - using same 32B via vLLM for consistency
+  # When using vLLM, this is just the model name for API requests
+  chat-model: "Qwen/Qwen2.5-32B-Instruct"
+  chat-model-path: "/models/chat"
+  chat-model-quantization: "int4"
+  
+  # vLLM API Server - set to use shared model server instead of local models
+  # Deploy vllm-deployment.yaml first, then set the URL:
+  # llm-api-url: "http://vllm-server:8000/v1"
+  llm-api-url: ""  # Empty = use local models
+  llm-api-key: ""  # Optional API key if vLLM requires auth
+  
+  # LoRA adapter name for fine-tuned analysis (folder under /models/adapters/)
+  analysis-adapter-name: "call-analysis"
+  
+  # No transcript limit for 32B
+  max-transcript-length: "0"
+  
+  # Worker mode
+  worker-mode: "batch"
+  preload-chat-model: "true"
+  
+  # PII redaction
+  enable-pii-redaction: "true"
+  
+  # PBX Sources
+  pbx-live-url: "https://pbx.example.com/callrec/"
+  pbx-archive-url: "https://archive.example.com/"
+  
+  # GPU
+  cuda-visible-devices: "0"
+  
+  # Hot reload disabled for stability
+  enable-model-hot-reload: "false"
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: angel-intelligence-thor-models
+  namespace: default
+  labels:
+    app: angel-intelligence
+    tier: thor
+spec:
+  accessModes:
+    - ReadWriteMany
+  storageClassName: nfs-client
+  resources:
+    requests:
+      storage: 100Gi  # 32B + 14B + Whisper large + diarization
+
+---
+# =============================================================================
+# Thor Batch Worker Deployment
+# Handles call transcription and analysis with 32B model
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: angel-intelligence-thor-batch
+  namespace: default
+  labels:
+    app: angel-intelligence
+    component: batch-worker
+    tier: thor
+spec:
+  replicas: 1  # One worker per Thor node (uses 5 concurrent jobs internally)
+  selector:
+    matchLabels:
+      app: angel-intelligence
+      component: batch-worker
+      tier: thor
+  template:
+    metadata:
+      labels:
+        app: angel-intelligence
+        component: batch-worker
+        tier: thor
+    spec:
+      runtimeClassName: nvidia
+      
+      # Schedule only on Thor nodes
+      nodeSelector:
+        nvidia.com/gpu.product: "AGX-Thor"
+        # Or use a custom label:
+        # angel.ai/tier: "thor"
+      
+      # One worker per Thor node
+      affinity:
+        podAntiAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+          - labelSelector:
+              matchLabels:
+                app: angel-intelligence
+                tier: thor
+            topologyKey: kubernetes.io/hostname
+
+      containers:
+      - name: worker
+        image: your-registry/angel-intelligence:latest
+        imagePullPolicy: Always
+        
+        command: ["python", "-m", "src.worker.worker"]
+
+        env:
+        # Environment
+        - name: ANGEL_ENV
+          value: "production"
+        - name: WORKER_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: WORKER_MODE
+          value: "batch"
+
+        # Database
+        - name: AI_DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-host
+        - name: AI_DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-port
+        - name: AI_DB_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-database
+        - name: AI_DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-username
+        - name: AI_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-password
+
+        # R2 Storage
+        - name: R2_ENDPOINT
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: r2-endpoint
+        - name: R2_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: r2-access-key-id
+        - name: R2_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: r2-secret-access-key
+        - name: R2_BUCKET
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: r2-bucket
+
+        # HuggingFace token for diarization
+        - name: HUGGINGFACE_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: huggingface-token
+
+        # ConfigMap values
+        - name: POLL_INTERVAL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: poll-interval
+        - name: MAX_CONCURRENT_JOBS
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: max-concurrent-jobs
+        - name: ANALYSIS_MODE
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: analysis-mode
+        - name: WHISPER_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: whisper-model
+        - name: WHISPER_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: whisper-model-path
+        - name: ANALYSIS_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: analysis-model
+        - name: ANALYSIS_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: analysis-model-path
+        - name: ANALYSIS_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: analysis-model-quantization
+        - name: CHAT_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: chat-model
+        - name: CHAT_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: chat-model-path
+        - name: CHAT_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: chat-model-quantization
+        - name: LLM_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: llm-api-url
+        - name: LLM_API_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: llm-api-key
+        - name: ANALYSIS_ADAPTER_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: analysis-adapter-name
+        - name: MAX_TRANSCRIPT_LENGTH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: max-transcript-length
+        - name: TRANSCRIPT_SEGMENTATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: transcript-segmentation
+        - name: ENABLE_PII_REDACTION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: enable-pii-redaction
+        - name: PBX_LIVE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: pbx-live-url
+        - name: PBX_ARCHIVE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: pbx-archive-url
+        - name: CUDA_VISIBLE_DEVICES
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: cuda-visible-devices
+
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: "120Gi"  # Leave headroom for system
+          requests:
+            memory: "64Gi"
+            cpu: "8"
+
+        volumeMounts:
+        - name: models
+          mountPath: /models
+        - name: model-cache
+          mountPath: /root/.cache
+
+        livenessProbe:
+          exec:
+            command:
+            - python
+            - -c
+            - "import sys; sys.exit(0)"
+          initialDelaySeconds: 300
+          periodSeconds: 60
+
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: angel-intelligence-thor-models
+      - name: model-cache
+        emptyDir:
+          sizeLimit: 20Gi
+
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 300  # Allow current job to complete
+
+---
+# =============================================================================
+# Thor Interactive Worker (Optional)
+# Dedicated worker for real-time chat/summary requests
+# =============================================================================
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: angel-intelligence-thor-interactive
+  namespace: default
+  labels:
+    app: angel-intelligence
+    component: interactive
+    tier: thor
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: angel-intelligence
+      component: interactive
+      tier: thor
+  template:
+    metadata:
+      labels:
+        app: angel-intelligence
+        component: interactive
+        tier: thor
+    spec:
+      runtimeClassName: nvidia
+      
+      nodeSelector:
+        nvidia.com/gpu.product: "AGX-Thor"
+
+      containers:
+      - name: interactive
+        image: your-registry/angel-intelligence:latest
+        imagePullPolicy: Always
+        
+        command: ["python", "-m", "src.worker.worker"]
+
+        env:
+        - name: ANGEL_ENV
+          value: "production"
+        - name: WORKER_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        - name: WORKER_MODE
+          value: "interactive"
+        - name: PRELOAD_CHAT_MODEL
+          value: "true"
+
+        # Database (same secrets as batch)
+        - name: AI_DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-host
+        - name: AI_DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-port
+        - name: AI_DB_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-database
+        - name: AI_DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-username
+        - name: AI_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-password
+
+        # Chat model config
+        - name: CHAT_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: chat-model
+        - name: CHAT_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: chat-model-path
+        - name: CHAT_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: chat-model-quantization
+        - name: LLM_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: llm-api-url
+        - name: LLM_API_KEY
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: llm-api-key
+        - name: ANALYSIS_ADAPTER_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: analysis-adapter-name
+
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: "32Gi"  # 14B chat model only
+          requests:
+            memory: "16Gi"
+            cpu: "4"
+
+        volumeMounts:
+        - name: models
+          mountPath: /models
+        - name: model-cache
+          mountPath: /root/.cache
+
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: angel-intelligence-thor-models
+      - name: model-cache
+        emptyDir:
+          sizeLimit: 10Gi
+
+      restartPolicy: Always

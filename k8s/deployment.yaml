@@ -213,6 +213,25 @@ spec:
               name: angel-intelligence-config
               key: preload-chat-model
 
+        # vLLM shared model server
+        - name: LLM_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: vllm-base-url
+        
+        # LoRA adapter for fine-tuned analysis
+        - name: ANALYSIS_ADAPTER_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-adapter-name
+        - name: MODELS_BASE_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: models-base-path
+
         resources:
           limits:
             nvidia.com/gpu: 1
@@ -555,6 +574,25 @@ spec:
             configMapKeyRef:
               name: angel-intelligence-config
               key: analysis-model-quantization
+
+        # vLLM shared model server
+        - name: LLM_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: vllm-base-url
+        
+        # LoRA adapter for fine-tuned analysis
+        - name: ANALYSIS_ADAPTER_NAME
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-adapter-name
+        - name: MODELS_BASE_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: models-base-path
 
         # GPU
         - name: CUDA_VISIBLE_DEVICES

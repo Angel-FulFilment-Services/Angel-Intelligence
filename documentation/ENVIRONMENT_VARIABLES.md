@@ -256,6 +256,50 @@ CHAT_MODEL_PATH=/models/chat/base
 
 ---
 
+## External LLM API (vLLM)
+
+### LLM_API_URL
+
+**Required**: No  
+**Type**: String  
+**Default**: (empty - use local models)
+
+OpenAI-compatible API URL for external LLM server (e.g., vLLM, TGI, Ollama).
+When set, both analysis and interactive services use this API instead of loading local models.
+
+```env
+# vLLM server
+LLM_API_URL=http://vllm-server:8000/v1
+
+# Ollama
+LLM_API_URL=http://localhost:11434/v1
+
+# Kubernetes internal
+LLM_API_URL=http://vllm-server.voice-ai.svc.cluster.local:8000/v1
+```
+
+**Benefits of using vLLM:**
+- Single model serves multiple workers
+- Automatic request batching for higher throughput
+- Lower memory per worker
+- Can run 10-12 workers instead of 5-6 on Thor
+
+---
+
+### LLM_API_KEY
+
+**Required**: No  
+**Type**: String  
+**Default**: (empty)
+
+API key for external LLM server authentication (if required).
+
+```env
+LLM_API_KEY=your-api-key
+```
+
+---
+
 ## Audio Sources
 
 ### PBX_LIVE_URL

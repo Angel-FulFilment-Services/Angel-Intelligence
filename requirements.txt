@@ -43,6 +43,8 @@ transformers>=4.40.0
 accelerate
 huggingface-hub
 bitsandbytes>=0.43.0  # For int4/int8 quantization
+peft>=0.10.0  # LoRA adapters for fine-tuning
+datasets>=2.18.0  # For training data handling
 json-repair  # Robust JSON repair for LLM outputs
 
 # ------------------------------------------------------------------------------
