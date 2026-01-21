@@ -75,6 +75,7 @@ class Settings(BaseSettings):
     analysis_model: str = Field(default="Qwen/Qwen2.5-Omni-7B", description="HuggingFace model ID or local path")
     analysis_model_path: str = Field(default="", description="Local path for fine-tuned analysis model")
     analysis_model_quantization: str = Field(default="", description="Quantization: int4, int8, or empty for none")
+    max_transcript_length: int = Field(default=0, description="Max transcript chars for analysis (0=unlimited, use 8000 for 3B models)")
     
     # Chat model (base model, not fine-tuned)
     chat_model: str = Field(default="Qwen/Qwen2.5-Omni-7B", description="HuggingFace model ID for chat")
@@ -104,6 +105,11 @@ class Settings(BaseSettings):
     
     # Transcription settings
     transcript_segmentation: str = Field(default="word", description="Segmentation: 'word' or 'sentence'")
+    
+    # HuggingFace token for pyannote speaker diarization
+    # Get from https://huggingface.co/settings/tokens (read access)
+    # Accept agreements at: https://huggingface.co/pyannote/speaker-diarization-3.1
+    huggingface_token: str = Field(default="", description="HuggingFace token for pyannote diarization")
     
     # PII redaction
     enable_pii_redaction: bool = Field(default=True, description="Enable PII detection and redaction")

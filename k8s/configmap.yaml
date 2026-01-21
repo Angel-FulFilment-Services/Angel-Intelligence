@@ -6,33 +6,57 @@ metadata:
   labels:
     app: angel-intelligence
 data:
+  # Environment
+  angel-env: "production"
+  
   # Processing Configuration
   poll-interval: "30"
-  analysis-mode: "audio"
+  max-concurrent-jobs: "1"
+  max-retry-attempts: "3"
+  retry-delay-hours: "1"
+  
+  # Analysis mode: 'audio' or 'transcript'
+  analysis-mode: "transcript"
+  
+  # Transcription settings
   transcript-segmentation: "word"
+  
+  # PII redaction
   enable-pii-redaction: "true"
-  preload-chat-model: "false"
+  
+  # Chat model preloading
+  preload-chat-model: "true"
+  
+  # Max transcript length (0=unlimited, 8000 for smaller models)
+  max-transcript-length: "0"
   
   # Whisper Model
   whisper-model: "medium"
   whisper-model-path: "/models/whisper"
   
   # Analysis Model (for batch call processing)
-  analysis-model: "Qwen/Qwen2.5-Omni-7B"
+  analysis-model: "Qwen/Qwen2.5-14B-Instruct"
   analysis-model-path: "/models/analysis"
-  analysis-model-quantization: ""
+  analysis-model-quantization: "int4"
   
   # Chat Model (for interactive requests)
-  chat-model: "Qwen/Qwen2.5-0.5B-Instruct"
+  chat-model: "Qwen/Qwen2.5-7B-Instruct"
   chat-model-path: "/models/chat"
-  chat-model-quantization: ""
+  chat-model-quantization: "int4"
+  
+  # Worker mode: 'batch', 'interactive', 'both', or 'api'
+  worker-mode: "both"
   
   # PBX Recording Sources
   pbx-live-url: "https://pbx.angelfs.co.uk/callrec/"
   pbx-archive-url: "https://afs-pbx-callarchive.angelfs.co.uk/"
   
   # GPU Configuration (0 for first GPU, -1 for CPU only)
+  # On multi-GPU systems, set to the index of the NVIDIA GPU
   cuda-visible-devices: "0"
+  
+  # Model hot reload (production feature)
+  enable-model-hot-reload: "false"
 
 ---
 apiVersion: v1

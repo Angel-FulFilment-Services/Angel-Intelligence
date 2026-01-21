@@ -22,7 +22,7 @@ logger = logging.getLogger(__name__)
 # Check for model availability
 QWEN_AVAILABLE = False
 try:
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     import torch
     QWEN_AVAILABLE = True
 except ImportError:
@@ -102,17 +102,36 @@ class InteractiveService:
             "device_map": "auto" if self._device == "cuda" else None,
         }
         
-        # Apply quantization if configured
-        if self.settings.chat_model_quantization == "int4":
-            load_kwargs["load_in_4bit"] = True
-        elif self.settings.chat_model_quantization == "int8":
-            load_kwargs["load_in_8bit"] = True
+        # Apply quantization if configured (GPU only - no CPU offload for int4)
+        if self.settings.chat_model_quantization == "int4" and self._device == "cuda":
+            load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+            )
+        elif self.settings.chat_model_quantization == "int8" and self._device == "cuda":
+            load_kwargs["quantization_config"] = BitsAndBytesConfig(
+                load_in_8bit=True,
+                llm_int8_enable_fp32_cpu_offload=True,
+            )
         else:
             load_kwargs["torch_dtype"] = torch.float16 if self._device == "cuda" else torch.float32
         
-        self._model = AutoModelForCausalLM.from_pretrained(model_path, **load_kwargs)
+        try:
+            self._model = AutoModelForCausalLM.from_pretrained(model_path, **load_kwargs)
+        except Exception as e:
+            # Fallback to CPU with float32 if quantized loading fails
+            logger.warning(f"Quantized model loading failed: {e}")
+            logger.info("Falling back to CPU with float32 (slower but compatible)")
+            load_kwargs = {
+                "trust_remote_code": True,
+                "device_map": None,
+                "torch_dtype": torch.float32,
+            }
+            self._model = AutoModelForCausalLM.from_pretrained(model_path, **load_kwargs)
+            self._model = self._model.to("cpu")
+            self._device = "cpu"
         
-        if self._device == "cpu":
+        if self._device == "cpu" and not hasattr(self._model, '_hf_hook'):
             self._model = self._model.to(self._device)
         
         elapsed = time.time() - start_time

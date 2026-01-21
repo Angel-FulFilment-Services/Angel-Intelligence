@@ -61,12 +61,16 @@ class TranscriptionService:
         self.model_size = settings.whisper_model
         self.segmentation = settings.transcript_segmentation
         
+        # HuggingFace token for pyannote diarization
+        self.hf_token = settings.huggingface_token or None
+        
         # Models (lazy loaded)
         self._whisper_model = None
         self._alignment_model = None
         self._alignment_metadata = None
+        self._diarize_model = None
         
-        logger.info(f"TranscriptionService initialised: device={self.device}, model={self.model_size}")
+        logger.info(f"TranscriptionService initialised: device={self.device}, model={self.model_size}, diarization={'pyannote' if self.hf_token else 'fallback'}")
     
     def _ensure_model_loaded(self) -> None:
         """Ensure the Whisper model is loaded."""
@@ -128,9 +132,9 @@ class TranscriptionService:
             # Apply segmentation preference
             result = self._apply_segmentation(result)
             
-            # Add speaker labels
+            # Add speaker labels (diarization)
             if diarize:
-                result = self._add_speaker_labels(result)
+                result = self._add_speaker_labels(result, audio)
             
             # Format response
             segments = self._format_segments(result["segments"])
@@ -222,15 +226,21 @@ class TranscriptionService:
         
         return result
     
-    def _add_speaker_labels(self, result: Dict[str, Any]) -> Dict[str, Any]:
+    def _add_speaker_labels(self, result: Dict[str, Any], audio) -> Dict[str, Any]:
         """
-        Add speaker labels to segments.
+        Add speaker labels to segments using pyannote diarization.
         
-        Uses simple gap-based diarisation as fallback.
-        For proper diarisation, pyannote.audio with HuggingFace token is needed.
+        Falls back to gap-based heuristic if HuggingFace token not configured.
         """
-        # Simple alternating speakers based on gaps
-        # TODO: Integrate pyannote.audio for proper diarisation
+        # Try pyannote diarization if token available
+        if self.hf_token:
+            try:
+                return self._diarize_with_pyannote(result, audio)
+            except Exception as e:
+                logger.warning(f"Pyannote diarization failed, using fallback: {e}")
+        
+        # Fallback: Simple alternating speakers based on gaps
+        logger.debug("Using gap-based speaker diarization fallback")
         current_speaker = 0
         last_end = 0
         speaker_gap_threshold = 2.0  # seconds
@@ -242,6 +252,36 @@ class TranscriptionService:
             segment["speaker"] = f"SPEAKER_{current_speaker:02d}"
             last_end = segment.get("end", 0)
         
+        return result
+    
+    def _diarize_with_pyannote(self, result: Dict[str, Any], audio) -> Dict[str, Any]:
+        """
+        Perform speaker diarization using pyannote via WhisperX.
+        
+        Requires HuggingFace token with access to pyannote models.
+        """
+        from whisperx.diarize import DiarizationPipeline
+        
+        # Load diarization model if needed
+        if self._diarize_model is None:
+            logger.info("Loading pyannote diarization model...")
+            self._diarize_model = DiarizationPipeline(
+                use_auth_token=self.hf_token,
+                device=self.device
+            )
+            logger.info("Pyannote diarization model loaded")
+        
+        # Run diarization (expects 2 speakers for call recordings)
+        diarize_segments = self._diarize_model(
+            audio,
+            min_speakers=2,
+            max_speakers=2
+        )
+        
+        # Assign speaker labels to transcript segments
+        result = whisperx.assign_word_speakers(diarize_segments, result)
+        
+        logger.info("Pyannote diarization complete")
         return result
     
     def _format_segments(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -291,6 +331,36 @@ class TranscriptionService:
     def _build_full_transcript(self, segments: List[Dict[str, Any]]) -> str:
         """Build full transcript from segments."""
         return " ".join([s["text"] for s in segments if s["text"]])
+    
+    def unload(self) -> None:
+        """
+        Unload all models to free GPU memory.
+        
+        Call this after transcription is complete and before loading
+        other models (e.g., analysis model) to avoid CUDA OOM errors.
+        """
+        logger.debug("Unloading transcription models to free GPU memory")
+        
+        if self._whisper_model is not None:
+            del self._whisper_model
+            self._whisper_model = None
+        
+        if self._alignment_model is not None:
+            del self._alignment_model
+            del self._alignment_metadata
+            self._alignment_model = None
+            self._alignment_metadata = None
+        
+        if self._diarize_model is not None:
+            del self._diarize_model
+            self._diarize_model = None
+        
+        # Force garbage collection and clear CUDA cache
+        gc.collect()
+        if torch.cuda.is_available():
+            torch.cuda.empty_cache()
+        
+        logger.info("Transcription models unloaded")
     
     def is_available(self) -> bool:
         """Check if transcription service is available."""

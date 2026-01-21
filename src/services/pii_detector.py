@@ -430,6 +430,8 @@ class PIIDetector:
             "type": pii_type,
             "original": match.text,
             "redacted": redacted,
+            "start_char": match.start_char,
+            "end_char": match.end_char,
             "timestamp_start": match.timestamp_start,
             "timestamp_end": match.timestamp_end,
             "confidence": match.confidence,

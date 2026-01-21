@@ -7,6 +7,17 @@ and processes them through the AI pipeline.
 Runs independently - no Laravel queue dependency.
 """
 
+# Set GPU selection BEFORE importing torch/transformers
+# This MUST happen before any CUDA initialization
+import os
+if cuda_devices := os.environ.get("CUDA_VISIBLE_DEVICES"):
+    pass  # Already set in environment
+else:
+    # On dual-GPU systems (Intel iGPU + NVIDIA dGPU), the iGPU may be device 0
+    # Default to device 1 if not specified and we detect an NVIDIA GPU
+    # User can override by setting CUDA_VISIBLE_DEVICES in .env
+    pass  # Let PyTorch auto-detect
+
 import logging
 import signal
 import sys

@@ -748,15 +748,15 @@ async def transcribe_call(request: TranscribeRequest):
     if transcription_lock.status == TranscriptionStatus.COMPLETED and transcription_lock.full_transcript:
         logger.info(f"Returning cached transcription for apex_id {apex_id}")
         
-        # Map speaker labels for response (SPEAKER_00 -> agent, SPEAKER_01 -> customer)
+        # Map speaker labels for response (SPEAKER_00 -> agent, SPEAKER_01 -> supporter)
         segments = []
         for seg in transcription_lock.segments:
             speaker = seg.get("speaker", "SPEAKER_00")
-            # Simple mapping: first speaker is agent, second is customer
+            # Simple mapping: first speaker is agent, second is supporter
             if speaker in ["SPEAKER_00", "agent"]:
                 speaker_label = "agent"
             else:
-                speaker_label = "customer"
+                speaker_label = "supporter"
                 
             segments.append(TranscribeSegment(
                 start=seg.get("start", 0.0),
@@ -859,7 +859,7 @@ async def transcribe_call(request: TranscribeRequest):
                     if speaker in ["SPEAKER_00", "agent"]:
                         speaker_label = "agent"
                     else:
-                        speaker_label = "customer"
+                        speaker_label = "supporter"
                         
                     segments.append(TranscribeSegment(
                         start=seg.get("start", 0.0),

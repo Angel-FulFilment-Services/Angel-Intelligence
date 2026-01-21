@@ -298,27 +298,101 @@ class VoiceFingerprintService:
             logger.error(f"Speaker identification failed: {e}")
             return segments
     
+    def _extract_agent_only_embedding(
+        self,
+        audio_path: str,
+        segments: List[Dict[str, Any]]
+    ) -> Optional[np.ndarray]:
+        """
+        Extract embedding from agent segments only.
+        
+        Filters segments to only include those labelled as 'agent' or 'SPEAKER_00',
+        concatenates the audio, and extracts a single embedding.
+        
+        Args:
+            audio_path: Path to audio file
+            segments: Transcript segments with speaker labels
+            
+        Returns:
+            256-dimensional embedding for agent voice only, or None if failed
+        """
+        if self.use_mock:
+            return np.random.randn(256).astype(np.float32)
+        
+        try:
+            self._ensure_encoder_loaded()
+            
+            import soundfile as sf
+            audio_data, sample_rate = sf.read(audio_path)
+            
+            # Collect only agent audio segments
+            agent_samples = []
+            
+            for segment in segments:
+                speaker = segment.get("speaker", "")
+                # Include agent-labelled segments and SPEAKER_00 (typically agent)
+                if speaker in ["agent", "SPEAKER_00"] or speaker.startswith("agent_"):
+                    start_sample = int(segment.get("start", 0) * sample_rate)
+                    end_sample = int(segment.get("end", 0) * sample_rate)
+                    
+                    if end_sample > start_sample and end_sample <= len(audio_data):
+                        agent_samples.append(audio_data[start_sample:end_sample])
+            
+            if not agent_samples:
+                logger.warning("No agent segments found in transcript")
+                return None
+            
+            # Concatenate all agent audio
+            combined_audio = np.concatenate(agent_samples)
+            
+            # Need at least 1 second of audio for reliable embedding
+            min_samples = sample_rate * 1
+            if len(combined_audio) < min_samples:
+                logger.warning(f"Not enough agent audio for fingerprint ({len(combined_audio)/sample_rate:.1f}s)")
+                return None
+            
+            # Extract embedding from agent-only audio
+            embedding = self._encoder.embed_utterance(combined_audio)
+            
+            logger.debug(f"Extracted agent embedding from {len(combined_audio)/sample_rate:.1f}s of audio")
+            return embedding.astype(np.float32)
+            
+        except Exception as e:
+            logger.error(f"Failed to extract agent-only embedding: {e}")
+            return None
+
     def update_fingerprint(
         self,
         halo_id: int,
         agent_name: str,
-        audio_path: str
+        audio_path: str,
+        segments: Optional[List[Dict[str, Any]]] = None
     ) -> bool:
         """
         Update or create fingerprint for an agent.
+        
+        IMPORTANT: Only extracts voice from agent segments, never supporter.
         
         Args:
             halo_id: Agent's Halo ID
             agent_name: Agent's name
             audio_path: Path to audio sample
+            segments: Transcript segments with speaker labels (to isolate agent voice)
             
         Returns:
             True if successful
         """
         try:
-            embedding = self.extract_embedding(audio_path)
+            # If we have segments, only extract agent voice
+            if segments:
+                embedding = self._extract_agent_only_embedding(audio_path, segments)
+            else:
+                # Fallback to full audio (not recommended - may include supporter)
+                logger.warning("No segments provided - fingerprint may include supporter voice")
+                embedding = self.extract_embedding(audio_path)
             
             if embedding is None:
+                logger.warning("Could not extract agent embedding - skipping fingerprint update")
                 return False
             
             # Check for existing fingerprint

@@ -16,7 +16,7 @@ Processes individual call recordings through the full pipeline:
 import logging
 import os
 import time
-from typing import Optional, Tuple, Dict, Any
+from typing import Optional, Tuple, Dict, Any, List
 
 from src.config import get_settings
 from src.database import CallRecording, CallTranscription, CallAnalysis, ClientConfig
@@ -64,6 +64,9 @@ class CallProcessor:
         """Initialise the call processor."""
         settings = get_settings()
         
+        # Log GPU info for debugging
+        self._log_gpu_info()
+        
         # Initialise services
         self.downloader = AudioDownloader()
         self.transcriber = TranscriptionService()
@@ -76,6 +79,24 @@ class CallProcessor:
         self.retain_audio_default = False
         
         logger.info("CallProcessor initialised")
+    
+    def _log_gpu_info(self):
+        """Log GPU information for debugging."""
+        try:
+            import torch
+            cuda_visible = os.environ.get("CUDA_VISIBLE_DEVICES", "not set")
+            logger.info(f"CUDA_VISIBLE_DEVICES: {cuda_visible}")
+            
+            if torch.cuda.is_available():
+                device_count = torch.cuda.device_count()
+                logger.info(f"CUDA available: {device_count} device(s)")
+                for i in range(device_count):
+                    props = torch.cuda.get_device_properties(i)
+                    logger.info(f"  GPU {i}: {props.name} ({props.total_memory // (1024**2)} MB)")
+            else:
+                logger.warning("CUDA not available - running on CPU")
+        except Exception as e:
+            logger.warning(f"Could not get GPU info: {e}")
     
     def process(self, recording: CallRecording) -> bool:
         """
@@ -151,6 +172,9 @@ class CallProcessor:
                     pii_result
                 )
             
+            # Step 5.5: Unload transcription models to free GPU for analysis
+            self.transcriber.unload()
+            
             # Step 6: Analyse (with client config)
             analysis_result = self._analyse(
                 audio_path, 
@@ -168,7 +192,8 @@ class CallProcessor:
                 self._update_voice_fingerprint(
                     recording.halo_id,
                     recording.agent_name,
-                    audio_path
+                    audio_path,
+                    transcript_result.get("segments", [])
                 )
             
             # Step 9: Handle audio retention
@@ -271,40 +296,67 @@ class CallProcessor:
         known_halo_id: Optional[int] = None
     ) -> dict:
         """Identify speakers using voice fingerprinting."""
-        if not self.voice_fingerprint.is_available():
-            logger.info("Voice fingerprinting not available")
-            return transcript
-        
-        logger.info("Identifying speakers via voice fingerprint")
-        
         segments = transcript.get("segments", [])
-        identified_segments = self.voice_fingerprint.identify_speakers(
-            audio_path,
-            segments,
-            known_halo_id
-        )
         
-        # Check for call transfers
-        transfer_info = self.voice_fingerprint.detect_call_transfer(identified_segments)
-        if transfer_info:
-            logger.info(f"Call transfer detected: {transfer_info['agent_count']} agents")
-            transcript["call_transfer"] = transfer_info
+        if self.voice_fingerprint.is_available():
+            logger.info("Identifying speakers via voice fingerprint")
+            
+            identified_segments = self.voice_fingerprint.identify_speakers(
+                audio_path,
+                segments,
+                known_halo_id
+            )
+            
+            # Check for call transfers
+            transfer_info = self.voice_fingerprint.detect_call_transfer(identified_segments)
+            if transfer_info:
+                logger.info(f"Call transfer detected: {transfer_info['agent_count']} agents")
+                transcript["call_transfer"] = transfer_info
+            
+            transcript["segments"] = identified_segments
+        else:
+            # Fallback: Map SPEAKER_00 -> agent, others -> supporter
+            logger.info("Voice fingerprinting not available - using fallback speaker labels")
+            transcript["segments"] = self._normalize_speaker_labels(segments)
         
-        transcript["segments"] = identified_segments
         return transcript
+    
+    def _normalize_speaker_labels(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Normalize speaker labels to agent/supporter.
+        
+        SPEAKER_00 is assumed to be the agent (typically initiates call).
+        All other speakers are labelled as supporter.
+        """
+        normalized = []
+        for seg in segments:
+            new_seg = seg.copy()
+            speaker = seg.get("speaker", "SPEAKER_00")
+            
+            if speaker in ["SPEAKER_00", "agent"] or speaker.startswith("agent_"):
+                new_seg["speaker"] = "agent"
+                new_seg["speaker_id"] = "agent"
+            else:
+                new_seg["speaker"] = "supporter"
+                new_seg["speaker_id"] = "supporter"
+            
+            normalized.append(new_seg)
+        
+        return normalized
     
     def _update_voice_fingerprint(
         self,
         halo_id: int,
         agent_name: str,
-        audio_path: str
+        audio_path: str,
+        segments: List[Dict[str, Any]]
     ) -> None:
-        """Update voice fingerprint for known agent."""
+        """Update voice fingerprint for known agent (agent segments only, never supporter)."""
         if not self.voice_fingerprint.is_available():
             return
         
         try:
-            self.voice_fingerprint.update_fingerprint(halo_id, agent_name, audio_path)
+            self.voice_fingerprint.update_fingerprint(halo_id, agent_name, audio_path, segments)
         except Exception as e:
             # Non-fatal - log but don't fail processing
             logger.warning(f"Failed to update voice fingerprint: {e}")
