@@ -93,7 +93,8 @@ class AnalysisService:
     
     def __init__(self):
         """Initialise the analysis service."""
-        settings = get_settings()
+        self.settings = get_settings()
+        settings = self.settings  # Local alias for convenience
         
         # Configuration
         self.analysis_mode = settings.analysis_mode  # 'audio' or 'transcript'
@@ -356,12 +357,21 @@ class AnalysisService:
         total_time = 0
         
         for segment in transcript.get("segments", []):
-            speaker = segment.get("speaker", "SPEAKER_00")
+            speaker = segment.get("speaker", "unknown")
             duration = segment.get("end", 0) - segment.get("start", 0)
             total_time += duration
             
-            if speaker not in raw_metrics:
-                raw_metrics[speaker] = {
+            # Normalize speaker label to agent/supporter
+            if speaker in ["agent", "SPEAKER_00"] or speaker.startswith("agent"):
+                speaker_label = "agent"
+            elif speaker in ["supporter", "SPEAKER_01"] or speaker.startswith("supporter"):
+                speaker_label = "supporter"
+            else:
+                # Unknown speaker - try to infer from speaker ID
+                speaker_label = "supporter" if "01" in speaker else "agent"
+            
+            if speaker_label not in raw_metrics:
+                raw_metrics[speaker_label] = {
                     "talk_time_seconds": 0,
                     "word_count": 0,
                     "segment_count": 0,
@@ -369,18 +379,15 @@ class AnalysisService:
                 }
             
             text = segment.get("text", "")
-            raw_metrics[speaker]["talk_time_seconds"] += duration
-            raw_metrics[speaker]["word_count"] += len(text.split())
-            raw_metrics[speaker]["segment_count"] += 1
+            raw_metrics[speaker_label]["talk_time_seconds"] += duration
+            raw_metrics[speaker_label]["word_count"] += len(text.split())
+            raw_metrics[speaker_label]["segment_count"] += 1
         
         # Calculate percentages and WPM
         formatted_metrics = {}
-        for speaker, data in raw_metrics.items():
+        for speaker_label, data in raw_metrics.items():
             talk_time = data["talk_time_seconds"]
             word_count = data["word_count"]
-            
-            # Determine if agent or supporter (first speaker is usually agent)
-            speaker_label = "agent" if speaker == "SPEAKER_00" else "supporter"
             
             formatted_metrics[speaker_label] = {
                 "talk_time_seconds": round(talk_time, 1),
@@ -390,6 +397,8 @@ class AnalysisService:
                 "interruptions": data["interruptions"],
                 "silence_percentage": 0,  # Would need more analysis
             }
+        
+        return formatted_metrics
         
         return formatted_metrics
     
@@ -548,8 +557,11 @@ class AnalysisService:
             "messages": messages,
             "max_tokens": 2000,
             "temperature": 0,  # Deterministic for structured output
-            "repetition_penalty": 1.1,
         }
+        
+        # Only add repetition_penalty for vLLM (not supported by OpenAI/Groq)
+        if "groq.com" not in self.llm_api_url and "openai.com" not in self.llm_api_url:
+            payload["repetition_penalty"] = 1.1
         
         # Add LoRA adapter if specified and available
         if adapter_name:
@@ -913,7 +925,7 @@ Return your analysis as valid JSON matching this exact structure:
         {{"description": "specific follow-up action needed", "priority": "high/medium/low"}}
     ],
     "compliance_flags": [
-        {{"type": "category", "issue": "detailed description of compliance concern", "severity": "low/medium/high/critical"}}
+        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "issue": "detailed description of the specific compliance concern", "severity": "low/medium/high/critical", "timestamp_start": 0.0, "timestamp_end": 0.0}}
     ],
     "improvement_areas": [
         {{
@@ -936,8 +948,14 @@ ARRAY LIMITS (do not exceed):
 - key_topics: maximum 5 items
 - agent_actions_performed: maximum 8 items
 - action_items: maximum 5 items
-- compliance_flags: maximum 5 items
+- compliance_flags: (ONLY include actual issues found - use empty array [] if no issues)
 - improvement_areas: maximum 5 items
+
+IMPORTANT FOR COMPLIANCE FLAGS:
+- ONLY include compliance_flags if there is an ACTUAL issue detected
+- If NO compliance issues are found, use an empty array: "compliance_flags": []
+- DO NOT create entries saying "No issues found" - just leave the array empty
+- Include timestamp_start and timestamp_end for each issue (approximate seconds in the call)
 
 CRITICAL RULES:
 - Each array item must be unique - DO NOT repeat yourself
@@ -962,8 +980,8 @@ Return your analysis as valid JSON matching this EXACT structure:
         {{"name": "Gift Aid", "confidence": 0.8}}
     ],
     "agent_actions_performed": [
-        {{"action": "Greeted supporter", "timestamp_start": 0.0, "quality": 4}},
-        {{"action": "Verified identity", "timestamp_start": 15.0, "quality": 4}}
+        {{"action": "Greeted supporter", "timestamp_start": 0.0, "timestamp_end": 5.0, "quality": 4}},
+        {{"action": "Verified identity", "timestamp_start": 15.0, "timestamp_end": 20.0, "quality": 4}}
     ],
     "performance_scores": {{
         "Empathy": 7,
@@ -979,7 +997,7 @@ Return your analysis as valid JSON matching this EXACT structure:
         {{"description": "Send confirmation email", "priority": "high"}}
     ],
     "compliance_flags": [
-        {{"type": "data_protection", "issue": "Description of issue", "severity": "low"}}
+        {{"type": "GDPR", "issue": "Description of actual issue found", "severity": "low", "timestamp_start": 0.0, "timestamp_end": 0.0}}
     ],
     "improvement_areas": [
         {{
@@ -1004,11 +1022,12 @@ PERFORMANCE CRITERIA: {rubric_list}
 CRITICAL RULES:
 1. Use lowercase field names with underscores exactly as shown
 2. Include empty arrays [] if no items found (don't omit fields)
-3. MAXIMUM array sizes: key_topics (3), agent_actions_performed (5), action_items (3), compliance_flags (2), improvement_areas (3)
+3. MAXIMUM array sizes: key_topics (3), agent_actions_performed (5), action_items (3), improvement_areas (3)
 4. DO NOT repeat yourself - each item in an array must be unique
 5. Keep descriptions concise - one sentence maximum
 6. Return ONLY the JSON object, no text before or after
-7. Stop generating after the final closing brace"""
+7. Stop generating after the final closing brace
+8. For compliance_flags: ONLY include ACTUAL issues - use empty array [] if no issues found. DO NOT add entries saying "No issues found"."""
     
     def _generate_text_response(self, prompt: str) -> str:
         """Generate text response from model."""
@@ -1074,6 +1093,11 @@ CRITICAL RULES:
         speaker_metrics: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Parse analysis response into structured format."""
+        # DEBUG: Log the raw response
+        logger.info(f"=== RAW LLM RESPONSE START ===")
+        logger.info(response)
+        logger.info(f"=== RAW LLM RESPONSE END ===")
+        
         try:
             start = response.find('{')
             end = response.rfind('}')

@@ -325,9 +325,70 @@ class CallProcessor:
         """
         Normalize speaker labels to agent/supporter.
         
-        SPEAKER_00 is assumed to be the agent (typically initiates call).
-        All other speakers are labelled as supporter.
+        Uses heuristics to determine which speaker is the agent:
+        1. Agent typically speaks FIRST (outbound calls)
+        2. Agent typically speaks MORE (guiding the conversation)
+        
+        We calculate talk time per speaker and use first-speaker as tiebreaker.
         """
+        if not segments:
+            return segments
+        
+        # Calculate talk time per speaker
+        speaker_talk_time = {}
+        first_speaker = None
+        
+        for seg in segments:
+            speaker = seg.get("speaker", "SPEAKER_00")
+            if speaker.startswith("agent") or speaker == "agent":
+                # Already labelled, skip calculation
+                return self._simple_normalize(segments)
+            
+            duration = seg.get("end", 0) - seg.get("start", 0)
+            speaker_talk_time[speaker] = speaker_talk_time.get(speaker, 0) + duration
+            
+            if first_speaker is None:
+                first_speaker = speaker
+        
+        if not speaker_talk_time:
+            return self._simple_normalize(segments)
+        
+        # Determine agent: speaker with most talk time (agent guides call)
+        # For outbound charity calls, agent typically talks 55-70% of the time
+        sorted_speakers = sorted(speaker_talk_time.items(), key=lambda x: x[1], reverse=True)
+        most_talkative = sorted_speakers[0][0]
+        
+        # Use first speaker as tiebreaker if talk times are close (within 20%)
+        if len(sorted_speakers) > 1:
+            ratio = sorted_speakers[1][1] / sorted_speakers[0][1] if sorted_speakers[0][1] > 0 else 0
+            if ratio > 0.8:  # Talk times are close, use first speaker heuristic
+                agent_speaker = first_speaker
+                logger.debug(f"Talk times close ({ratio:.2f}), using first speaker as agent: {first_speaker}")
+            else:
+                agent_speaker = most_talkative
+                logger.debug(f"Using most talkative speaker as agent: {most_talkative} ({sorted_speakers[0][1]:.1f}s)")
+        else:
+            agent_speaker = most_talkative
+        
+        # Normalize labels
+        normalized = []
+        for seg in segments:
+            new_seg = seg.copy()
+            speaker = seg.get("speaker", "SPEAKER_00")
+            
+            if speaker == agent_speaker:
+                new_seg["speaker"] = "agent"
+                new_seg["speaker_id"] = "agent"
+            else:
+                new_seg["speaker"] = "supporter"
+                new_seg["speaker_id"] = "supporter"
+            
+            normalized.append(new_seg)
+        
+        return normalized
+    
+    def _simple_normalize(self, segments: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """Simple fallback normalization using SPEAKER_00 = agent."""
         normalized = []
         for seg in segments:
             new_seg = seg.copy()

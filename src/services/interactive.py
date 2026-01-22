@@ -175,8 +175,11 @@ class InteractiveService:
             "max_tokens": max_tokens,
             "temperature": temperature,
             "top_p": 0.85,
-            "repetition_penalty": 1.1,
         }
+        
+        # Only add repetition_penalty for vLLM (not supported by OpenAI/Groq)
+        if "groq.com" not in self.llm_api_url and "openai.com" not in self.llm_api_url:
+            payload["repetition_penalty"] = 1.1
         
         api_endpoint = f"{self.llm_api_url.rstrip('/')}/chat/completions"
         

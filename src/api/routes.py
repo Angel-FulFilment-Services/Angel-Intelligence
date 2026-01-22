@@ -8,7 +8,7 @@ Endpoints require Bearer token authentication.
 import logging
 import os
 from datetime import datetime
-from typing import Optional, List, Dict
+from typing import Optional, List, Dict, Any
 
 from fastapi import APIRouter, Depends, HTTPException, UploadFile, File, Query, BackgroundTasks
 from pydantic import BaseModel, Field
@@ -94,6 +94,12 @@ class SubmitRecordingRequest(BaseModel):
     direction: str = "outbound"
     duration_seconds: int = 0
     retain_audio: bool = False
+    # Additional reference fields
+    orderref: Optional[str] = None
+    enqref: Optional[str] = None
+    obref: Optional[str] = None
+    creative: Optional[str] = None
+    invoicing: Optional[str] = None
 
 
 class SubmitRecordingResponse(BaseModel):
@@ -248,8 +254,9 @@ async def submit_recording(request: SubmitRecordingRequest):
     recording_id = db.insert("""
         INSERT INTO ai_call_recordings 
         (apex_id, call_date, client_ref, campaign, halo_id, agent_name, direction,
-         duration_seconds, retain_audio, processing_status, created_at)
-        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', NOW())
+         duration_seconds, retain_audio, orderref, enqref, obref, creative, invoicing,
+         processing_status, created_at)
+        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'pending', NOW())
     """, (
         request.apex_id,
         request.call_date,
@@ -260,6 +267,11 @@ async def submit_recording(request: SubmitRecordingRequest):
         request.direction,
         request.duration_seconds,
         request.retain_audio,
+        request.orderref,
+        request.enqref,
+        request.obref,
+        request.creative,
+        request.invoicing,
     ))
     
     logger.info(f"Submitted recording {recording_id}: {request.apex_id}")
