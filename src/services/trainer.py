@@ -8,6 +8,10 @@ Supports versioned adapters for zero-downtime deployments:
   - Each training run creates a timestamped adapter (e.g., call-analysis-20260121-0200)
   - A 'current' manifest tracks the active version
   - Old versions are retained for rollback
+  
+Training lock:
+  - A lock file prevents concurrent training runs
+  - Lock includes start time and PID for debugging
 """
 
 import logging
@@ -39,6 +43,10 @@ try:
 except ImportError:
     TRAINING_AVAILABLE = False
     logger.warning("Training dependencies not installed. Run: pip install peft datasets")
+
+
+# Global lock file path for tracking training status
+TRAINING_LOCK_FILE = Path("models/adapters/.training_lock.json")
 
 
 class TrainingService:
@@ -99,6 +107,89 @@ class TrainingService:
             "report_to": "none",
         }
     
+    # =========================================================================
+    # Training Lock Management
+    # =========================================================================
+    
+    @staticmethod
+    def is_training_in_progress() -> Tuple[bool, Optional[Dict[str, Any]]]:
+        """
+        Check if training is currently in progress.
+        
+        Returns:
+            Tuple of (is_in_progress, lock_info)
+            lock_info contains: adapter_name, started_at, pid
+        """
+        lock_path = Path(get_settings().models_base_path) / "adapters" / ".training_lock.json"
+        
+        if not lock_path.exists():
+            return False, None
+        
+        try:
+            with open(lock_path, "r") as f:
+                lock_info = json.load(f)
+            
+            # Check if the lock is stale (older than 4 hours = likely crashed)
+            started_at = lock_info.get("started_at")
+            if started_at:
+                start_time = datetime.fromisoformat(started_at)
+                elapsed_hours = (datetime.now() - start_time).total_seconds() / 3600
+                if elapsed_hours > 4:
+                    logger.warning(f"Training lock is stale ({elapsed_hours:.1f} hours old), removing")
+                    lock_path.unlink()
+                    return False, None
+            
+            return True, lock_info
+            
+        except (json.JSONDecodeError, IOError) as e:
+            logger.warning(f"Failed to read training lock: {e}")
+            return False, None
+    
+    def _acquire_training_lock(self) -> bool:
+        """
+        Acquire the training lock.
+        
+        Returns:
+            True if lock acquired, False if training already in progress
+        """
+        lock_path = Path(self.settings.models_base_path) / "adapters" / ".training_lock.json"
+        lock_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        in_progress, lock_info = self.is_training_in_progress()
+        if in_progress:
+            logger.warning(f"Training already in progress: {lock_info}")
+            return False
+        
+        lock_data = {
+            "adapter_name": self.adapter_name,
+            "started_at": datetime.now().isoformat(),
+            "pid": os.getpid(),
+        }
+        
+        try:
+            with open(lock_path, "w") as f:
+                json.dump(lock_data, f, indent=2)
+            logger.info(f"Acquired training lock for adapter '{self.adapter_name}'")
+            return True
+        except IOError as e:
+            logger.error(f"Failed to acquire training lock: {e}")
+            return False
+    
+    def _release_training_lock(self) -> None:
+        """Release the training lock."""
+        lock_path = Path(self.settings.models_base_path) / "adapters" / ".training_lock.json"
+        
+        try:
+            if lock_path.exists():
+                lock_path.unlink()
+                logger.info("Released training lock")
+        except IOError as e:
+            logger.warning(f"Failed to release training lock: {e}")
+    
+    # =========================================================================
+    # Training Data Preparation
+    # =========================================================================
+    
     def prepare_training_data(self, limit: int = 2500) -> List[Dict[str, Any]]:
         """
         Load and prepare training data from annotations.
@@ -158,7 +249,7 @@ class TrainingService:
         logger.info(f"Prepared {len(training_samples)} training samples from annotations")
         return training_samples
     
-    def format_for_training(self, samples: List[Dict[str, Any]], tokenizer) -> Dataset:
+    def format_for_training(self, samples: List[Dict[str, Any]], tokenizer) -> "Dataset":
         """
         Format training samples into tokenized dataset.
         
@@ -215,133 +306,153 @@ Be accurate with sentiment scores (1-10) and quality scores (0-100)."""
         if not TRAINING_AVAILABLE:
             raise RuntimeError("Training dependencies not installed. Run: pip install peft datasets")
         
-        start_time = time.time()
-        
-        # Prepare data
-        logger.info("Loading training data from annotations...")
-        samples = self.prepare_training_data(limit=max_samples)
-        
-        if len(samples) < 10:
+        # Acquire training lock
+        if not self._acquire_training_lock():
+            in_progress, lock_info = self.is_training_in_progress()
             return {
                 "success": False,
-                "error": f"Insufficient training data: {len(samples)} samples (minimum 10)",
-                "samples_found": len(samples),
+                "error": "Training already in progress",
+                "lock_info": lock_info,
             }
         
-        # Load model and tokenizer
-        logger.info(f"Loading base model: {self.base_model_path}")
-        
-        tokenizer = AutoTokenizer.from_pretrained(
-            self.base_model_path,
-            trust_remote_code=True,
-            padding_side="right",
-        )
-        if tokenizer.pad_token is None:
-            tokenizer.pad_token = tokenizer.eos_token
-        
-        # Load model with quantization for memory efficiency
-        model = AutoModelForCausalLM.from_pretrained(
-            self.base_model_path,
-            trust_remote_code=True,
-            torch_dtype=torch.float16,
-            device_map="auto",
-            # Use 4-bit for training to fit in memory
-            load_in_4bit=True,
-            bnb_4bit_compute_dtype=torch.float16,
-            bnb_4bit_use_double_quant=True,
-            bnb_4bit_quant_type="nf4",
-        )
-        
-        # Prepare model for training
-        model.config.use_cache = False
-        model = self._prepare_model_for_training(model)
-        
-        # Apply LoRA
-        logger.info("Applying LoRA configuration...")
-        lora_config = LoraConfig(**self.lora_config)
-        model = get_peft_model(model, lora_config)
-        model.print_trainable_parameters()
-        
-        # Prepare dataset
-        logger.info("Tokenizing training data...")
-        train_dataset = self.format_for_training(samples, tokenizer)
-        
-        # Set up versioned checkpoint directory
-        checkpoint_dir = self._generate_versioned_output_dir()
-        checkpoint_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Training arguments with versioned output dir
-        train_args_dict = {**self.training_args}
-        train_args_dict["output_dir"] = str(checkpoint_dir)
-        
-        training_args = TrainingArguments(
-            **train_args_dict,
-            num_train_epochs=epochs,
-        )
-        
-        # Data collator
-        data_collator = DataCollatorForLanguageModeling(
-            tokenizer=tokenizer,
-            mlm=False,
-        )
-        
-        # Trainer
-        trainer = Trainer(
-            model=model,
-            args=training_args,
-            train_dataset=train_dataset,
-            data_collator=data_collator,
-        )
-        
-        # Train
-        logger.info("Starting training...")
-        train_result = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
-        
-        # Generate versioned adapter path
-        timestamp = datetime.now().strftime("%Y%m%d-%H%M")
-        version_name = f"{self.adapter_name}-{timestamp}"
-        versioned_path = self.adapter_base_path / version_name
-        
-        # Save adapter to versioned directory
-        logger.info(f"Saving adapter to {versioned_path}")
-        versioned_path.mkdir(parents=True, exist_ok=True)
-        model.save_pretrained(versioned_path)
-        tokenizer.save_pretrained(versioned_path)
-        
-        elapsed = time.time() - start_time
-        
-        # Save training metadata
-        metadata = {
-            "adapter_name": self.adapter_name,
-            "version": version_name,
-            "trained_at": datetime.now().isoformat(),
-            "base_model": self.base_model_path,
-            "samples_used": len(samples),
-            "epochs": epochs,
-            "training_loss": train_result.training_loss,
-            "training_time_seconds": elapsed,
-            "lora_config": self.lora_config,
-        }
-        
-        with open(versioned_path / "training_metadata.json", "w") as f:
-            json.dump(metadata, f, indent=2)
-        
-        # Promote this version to current
-        self._set_current_version(version_name, metadata)
-        
-        logger.info(f"Training completed in {elapsed/60:.1f} minutes")
-        logger.info(f"New adapter version: {version_name} (now current)")
-        
-        return {
-            "success": True,
-            "adapter_name": self.adapter_name,
-            "version": version_name,
-            "adapter_path": str(versioned_path),
-            "samples_used": len(samples),
-            "epochs": epochs,
-            "training_loss": train_result.training_loss,
-            "training_time_minutes": elapsed / 60,
-        }
+        try:
+            start_time = time.time()
+            
+            # Prepare data
+            logger.info("Loading training data from annotations...")
+            samples = self.prepare_training_data(limit=max_samples)
+            
+            if len(samples) < 10:
+                return {
+                    "success": False,
+                    "error": f"Insufficient training data: {len(samples)} samples (minimum 10)",
+                    "samples_found": len(samples),
+                }
+            
+            # Load model and tokenizer
+            logger.info(f"Loading base model: {self.base_model_path}")
+            
+            tokenizer = AutoTokenizer.from_pretrained(
+                self.base_model_path,
+                trust_remote_code=True,
+                padding_side="right",
+            )
+            if tokenizer.pad_token is None:
+                tokenizer.pad_token = tokenizer.eos_token
+            
+            # Load model with quantization for memory efficiency
+            model = AutoModelForCausalLM.from_pretrained(
+                self.base_model_path,
+                trust_remote_code=True,
+                torch_dtype=torch.float16,
+                device_map="auto",
+                # Use 4-bit for training to fit in memory
+                load_in_4bit=True,
+                bnb_4bit_compute_dtype=torch.float16,
+                bnb_4bit_use_double_quant=True,
+                bnb_4bit_quant_type="nf4",
+            )
+            
+            # Prepare model for training
+            model.config.use_cache = False
+            model = self._prepare_model_for_training(model)
+            
+            # Apply LoRA
+            logger.info("Applying LoRA configuration...")
+            lora_config = LoraConfig(**self.lora_config)
+            model = get_peft_model(model, lora_config)
+            model.print_trainable_parameters()
+            
+            # Prepare dataset
+            logger.info("Tokenizing training data...")
+            train_dataset = self.format_for_training(samples, tokenizer)
+            
+            # Set up versioned checkpoint directory
+            checkpoint_dir = self._generate_versioned_output_dir()
+            checkpoint_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Training arguments with versioned output dir
+            train_args_dict = {**self.training_args}
+            train_args_dict["output_dir"] = str(checkpoint_dir)
+            
+            training_args = TrainingArguments(
+                **train_args_dict,
+                num_train_epochs=epochs,
+            )
+            
+            # Data collator
+            data_collator = DataCollatorForLanguageModeling(
+                tokenizer=tokenizer,
+                mlm=False,
+            )
+            
+            # Trainer
+            trainer = Trainer(
+                model=model,
+                args=training_args,
+                train_dataset=train_dataset,
+                data_collator=data_collator,
+            )
+            
+            # Train
+            logger.info("Starting training...")
+            train_result = trainer.train(resume_from_checkpoint=resume_from_checkpoint)
+            
+            # Generate versioned adapter path
+            timestamp = datetime.now().strftime("%Y%m%d-%H%M")
+            version_name = f"{self.adapter_name}-{timestamp}"
+            versioned_path = self.adapter_base_path / version_name
+            
+            # Save adapter to versioned directory
+            logger.info(f"Saving adapter to {versioned_path}")
+            versioned_path.mkdir(parents=True, exist_ok=True)
+            model.save_pretrained(versioned_path)
+            tokenizer.save_pretrained(versioned_path)
+            
+            elapsed = time.time() - start_time
+            
+            # Save training metadata
+            metadata = {
+                "adapter_name": self.adapter_name,
+                "version": version_name,
+                "trained_at": datetime.now().isoformat(),
+                "base_model": self.base_model_path,
+                "samples_used": len(samples),
+                "epochs": epochs,
+                "training_loss": train_result.training_loss,
+                "training_time_seconds": elapsed,
+                "lora_config": self.lora_config,
+            }
+            
+            with open(versioned_path / "training_metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+            
+            # Promote this version to current
+            self._set_current_version(version_name, metadata)
+            
+            logger.info(f"Training completed in {elapsed/60:.1f} minutes")
+            logger.info(f"New adapter version: {version_name} (now current)")
+            
+            return {
+                "success": True,
+                "adapter_name": self.adapter_name,
+                "version": version_name,
+                "adapter_path": str(versioned_path),
+                "samples_used": len(samples),
+                "epochs": epochs,
+                "training_loss": train_result.training_loss,
+                "training_time_minutes": elapsed / 60,
+            }
+            
+        except Exception as e:
+            logger.exception(f"Training failed: {e}")
+            return {
+                "success": False,
+                "error": str(e),
+            }
+        finally:
+            # Always release the lock
+            self._release_training_lock()
     
     def _prepare_model_for_training(self, model):
         """Prepare model for LoRA training."""

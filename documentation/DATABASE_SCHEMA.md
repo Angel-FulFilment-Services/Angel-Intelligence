@@ -61,6 +61,7 @@ CREATE TABLE ai_call_recordings (
     obref VARCHAR(100) DEFAULT NULL,         -- Outbound reference number
     client_ref VARCHAR(100) DEFAULT NULL,
     campaign VARCHAR(100) DEFAULT NULL,
+    campaign_type VARCHAR(100) DEFAULT NULL, -- Campaign type for config lookup
     halo_id INT UNSIGNED DEFAULT NULL,
     agent_name VARCHAR(255) DEFAULT NULL,
     creative VARCHAR(100) DEFAULT NULL,
@@ -97,6 +98,7 @@ CREATE TABLE ai_call_recordings (
     INDEX idx_processing_status (processing_status),
     INDEX idx_call_date (call_date),
     INDEX idx_client_ref (client_ref),
+    INDEX idx_campaign_type (campaign_type),
     INDEX idx_halo_id (halo_id),
     INDEX idx_next_retry (next_retry_at, processing_status),
     INDEX idx_worker (processing_worker_id, processing_status)
@@ -421,20 +423,34 @@ CREATE TABLE ai_voice_fingerprints (
 
 ---
 
-### ai_client_configs
+### ai_configs
 
-Client-specific configuration overrides.
+Three-tier configuration system for call analysis.
+
+**Configuration Tiers:**
+- `universal` - Standard analysis framework (topics, actions, rubric)
+- `client` - Client-specific context (organisation info, tone guidelines)
+- `campaign_type` - Reusable campaign templates (goals, success criteria)
 
 ```sql
-CREATE TABLE ai_client_configs (
+CREATE TABLE ai_configs (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     
-    -- Client reference (NULL = global default)
+    -- Configuration tier (three-tier system)
+    config_tier ENUM('universal', 'client', 'campaign_type') 
+        NOT NULL DEFAULT 'client',
+    
+    -- Client reference (for 'client' tier)
     client_ref VARCHAR(100) DEFAULT NULL,
     
+    -- Campaign (legacy field)
+    campaign VARCHAR(100) DEFAULT NULL,
+    
+    -- Campaign type (for 'campaign_type' tier)
+    campaign_type VARCHAR(100) DEFAULT NULL,
+    
     -- Configuration
-    config_type ENUM('topics', 'agent_actions', 'performance_rubric', 'prompt', 'analysis_mode') 
-        NOT NULL,
+    config_type VARCHAR(100) NOT NULL,
     config_data JSON NOT NULL,
     
     -- Status
@@ -445,12 +461,42 @@ CREATE TABLE ai_client_configs (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
     -- Constraints
-    UNIQUE KEY unique_config (client_ref, config_type),
+    UNIQUE KEY unique_config_v2 (config_tier, client_ref, campaign_type, config_type),
     
     -- Indexes
+    INDEX idx_config_tier (config_tier),
     INDEX idx_client (client_ref),
+    INDEX idx_campaign_type (campaign_type),
     INDEX idx_active (is_active)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+```
+
+**Example Records:**
+
+```sql
+-- Universal config (analysis framework)
+INSERT INTO ai_configs 
+(config_tier, config_type, config_data, is_active)
+VALUES 
+('universal', 'analysis', 
+ '{"topics": ["Donation", "Gift Aid"], "agent_actions": ["greeting", "verification"], "performance_rubric": ["Empathy", "Clarity"]}',
+ TRUE);
+
+-- Client config (organisation context)
+INSERT INTO ai_configs 
+(config_tier, client_ref, config_type, config_data, is_active)
+VALUES 
+('client', 'CRUK001', 'client_info',
+ '{"organisation_name": "Cancer Research UK", "mission": "Beat cancer"}',
+ TRUE);
+
+-- Campaign type config (reusable template)
+INSERT INTO ai_configs 
+(config_tier, campaign_type, config_type, config_data, is_active)
+VALUES 
+('campaign_type', 'inbound_donation', 'campaign_info',
+ '{"goals": ["Capture donation", "Gift Aid confirmation"], "success_criteria": ["Payment processed"]}',
+ TRUE);
 ```
 
 ---
@@ -473,6 +519,13 @@ USE ai;
 -- Grant permissions
 GRANT ALL PRIVILEGES ON ai.* TO 'angel_ai'@'%';
 FLUSH PRIVILEGES;
+```
+
+### Migration: Add Three-Tier Config Support
+
+```sql
+-- Run scripts/migrate_config_tiers.sql to add three-tier support
+-- See documentation/CALL_ANALYSIS_CONFIG.md for details
 ```
 
 ---

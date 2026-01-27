@@ -5,6 +5,7 @@ All API endpoints for the Angel Intelligence service.
 Endpoints require Bearer token authentication.
 """
 
+import json
 import logging
 import os
 from datetime import datetime
@@ -71,8 +72,10 @@ class AnalysisResponse(BaseModel):
     sentiment_score: float
     sentiment_label: str
     quality_score: float
+    quality_zone: Optional[str] = None  # Excellent/Good/Satisfactory/Below Average/Poor
     key_topics: List[dict]
-    agent_actions_performed: List[dict]
+    agent_actions: List[dict]  # Neutral actions (what the agent did)
+    score_impacts: List[dict]  # Quality impacts (-5 to +5)
     performance_scores: dict
     action_items: List[dict]
     compliance_flags: List[dict]
@@ -368,8 +371,10 @@ async def get_analysis(recording_id: int):
         sentiment_score=float(row["sentiment_score"]),
         sentiment_label=row["sentiment_label"],
         quality_score=float(row["quality_score"]),
+        quality_zone=row.get("quality_zone"),
         key_topics=json.loads(row["key_topics"]) if row["key_topics"] else [],
-        agent_actions_performed=json.loads(row.get("agent_actions_performed", "[]")),
+        agent_actions=json.loads(row.get("agent_actions", "[]")) if row.get("agent_actions") else [],
+        score_impacts=json.loads(row.get("score_impacts", "[]")) if row.get("score_impacts") else [],
         performance_scores=json.loads(row.get("performance_scores", "{}")),
         action_items=json.loads(row["action_items"]) if row["action_items"] else [],
         compliance_flags=json.loads(row["compliance_flags"]) if row["compliance_flags"] else [],
@@ -416,192 +421,47 @@ async def get_analysis_config():
 @router.post(
     "/chat",
     response_model=ChatResponse,
-    dependencies=[Depends(verify_token)]
+    dependencies=[Depends(verify_token)],
+    deprecated=True
 )
 async def chat(request: ChatRequest):
     """
     Chat with the AI about call data.
     
-    Handles both new conversations and existing ones:
-    - New conversation: Creates conversation + messages atomically in a transaction
-    - Existing conversation: Appends messages to existing conversation
-    
-    If AI processing fails, the transaction rolls back - no orphaned records.
-    Supports user personalization when user object is provided.
+    .. deprecated::
+        Use POST /api/chat instead. This endpoint redirects to the enhanced
+        chat endpoint to prevent duplicate message saves.
     """
-    import time
-    from src.services.interactive import get_interactive_service
-    from src.database import ChatConversation, ChatMessage
+    # Redirect to enhanced chat to prevent duplicate saves
+    from src.api.routes import enhanced_chat, EnhancedChatRequest, ChatUser as EnhancedChatUser
     
-    request_start = time.time()
-    logger.info(f"[TIMING] Chat request received at {request_start}")
+    enhanced_request = EnhancedChatRequest(
+        message=request.message,
+        recording_id=request.recording_id,
+        conversation_id=int(request.conversation_id) if request.conversation_id else None,
+        user=EnhancedChatUser(
+            id=request.user.id if request.user else request.user_id or 0,
+            name=request.user.name if request.user else "User",
+            email=request.user.email if request.user else None,
+        ) if (request.user or request.user_id) else None,
+        user_id=request.user_id,
+        feature=request.feature or "general",
+        filters=request.filters,
+    )
     
-    db = get_db_connection()
-    conversation_id = None
-    is_new_conversation = False
-    assistant_message_id = None
+    enhanced_response = await enhanced_chat(enhanced_request)
     
-    # Extract user info for personalization
-    user_id = request.user.id if request.user else request.user_id
-    user_full_name = request.user.name if request.user else None
-    # Use only first name for privacy - never use full names in responses
-    user_name = user_full_name.split()[0] if user_full_name else None
-    
-    try:
-        # Start transaction for atomic operations
-        db.execute("START TRANSACTION")
-        
-        # Determine if this is a new or existing conversation
-        if request.conversation_id:
-            # Existing conversation - verify it exists
-            conversation_id = request.conversation_id
-            conversation = ChatConversation.get_by_id(conversation_id)
-            if not conversation:
-                db.execute("ROLLBACK")
-                raise HTTPException(status_code=404, detail="Conversation not found")
-        else:
-            # New conversation - create atomically with messages
-            if not user_id:
-                db.execute("ROLLBACK")
-                raise HTTPException(
-                    status_code=400, 
-                    detail="user or user_id is required when creating a new conversation"
-                )
-            
-            is_new_conversation = True
-            conversation = ChatConversation(
-                user_id=user_id,
-                feature=request.feature or "general",
-                title="New Conversation",  # Pulse will update this later
-                filters=request.filters,
-            )
-            conversation_id = conversation.save()
-            logger.info(f"Created new conversation {conversation_id} for user {user_id} ({user_name})")
-        
-        conv_time = time.time()
-        logger.info(f"[TIMING] Conversation setup took {conv_time - request_start:.2f}s")
-        
-        # Save user message
-        user_message = ChatMessage(
-            ai_chat_conversation_id=conversation_id,
-            role="user",
-            content=request.message,
-        )
-        user_message_id = user_message.save()
-        
-        save_time = time.time()
-        logger.info(f"[TIMING] User message save took {save_time - conv_time:.2f}s")
-        
-        # Build context if recording specified
-        context_parts = []
-        
-        # Add user context for personalization
-        if user_name:
-            context_parts.append(f"You are speaking with {user_name}. Address them by their first name only to keep responses personal and friendly. Never use full names.")
-        
-        if request.recording_id:
-            trans = db.fetch_one(
-                "SELECT full_transcript FROM ai_call_transcriptions WHERE ai_call_recording_id = %s",
-                (request.recording_id,)
-            )
-            analysis = db.fetch_one(
-                "SELECT summary, sentiment_label, quality_score FROM ai_call_analysis WHERE ai_call_recording_id = %s",
-                (request.recording_id,)
-            )
-            
-            if trans:
-                context_parts.append(f"Transcript: {trans['full_transcript'][:2000]}")
-            if analysis:
-                context_parts.append(f"Summary: {analysis['summary']}")
-                context_parts.append(f"Sentiment: {analysis['sentiment_label']}, Quality: {analysis['quality_score']}")
-        
-        context = "\n".join(context_parts) if context_parts else None
-        
-        context_time = time.time()
-        logger.info(f"[TIMING] Context build took {context_time - save_time:.2f}s")
-        
-        # Use interactive service for AI response with SQL Agent
-        logger.info(f"[TIMING] Starting AI generation with SQL Agent...")
-        settings = get_settings()
-        
-        if settings.worker_mode == "api" and settings.interactive_service_url:
-            from src.services.interactive_proxy import get_interactive_proxy
-            proxy = get_interactive_proxy()
-            result = proxy.chat_with_functions(
-                message=request.message,
-                user_name=user_name,
-                filters=request.filters,
-            )
-            logger.info(f"[TIMING] AI generation via proxy completed")
-        else:
-            service = get_interactive_service()
-            result = service.chat_with_functions(
-                message=request.message,
-                user_name=user_name,
-                filters=request.filters,
-            )
-        
-        # Check for AI errors - rollback if failed
-        if result.get("error"):
-            db.execute("ROLLBACK")
-            error_type = result.get("error_type", "unknown")
-            error_msg = result.get("error_message") or result.get("response", "AI service error")
-            logger.error(f"Chat error: {error_type} - {error_msg}")
-            
-            # Return the response even if there was an error - it may contain useful feedback
-            response_text = result.get("response", "")
-            if not response_text:
-                response_text = "I'm having trouble answering that question. Please try rephrasing it or ask something more specific."
-            
-            return ChatResponse(
-                success=True,  # Changed to True so frontend shows the message
-                response=response_text,
-                conversation_id=str(conversation_id) if conversation_id and not is_new_conversation else "",
-                error=None,
-                error_type=None,
-            )
-        
-        ai_time = time.time()
-        logger.info(f"[TIMING] AI generation took {ai_time - context_time:.2f}s")
-        
-        # Save assistant response
-        assistant_message = ChatMessage(
-            ai_chat_conversation_id=conversation_id,
-            role="assistant",
-            content=result["response"],
-        )
-        assistant_message_id = assistant_message.save()
-        
-        # Commit transaction - all records saved atomically
-        db.execute("COMMIT")
-        
-        total_time = time.time()
-        logger.info(f"[TIMING] Total request took {total_time - request_start:.2f}s")
-        
-        return ChatResponse(
-            success=True,
-            response=result["response"],
-            conversation_id=str(conversation_id),
-            message_id=assistant_message_id,
-        )
-        
-    except HTTPException:
-        # Re-raise HTTP exceptions (already handled)
-        raise
-    except Exception as e:
-        # Rollback on any unexpected error
-        try:
-            db.execute("ROLLBACK")
-        except:
-            pass
-        logger.error(f"Chat endpoint error: {e}")
-        raise HTTPException(
-            status_code=500,
-            detail={
-                "error": str(e),
-                "error_type": "internal_error",
-            }
-        )
+    return ChatResponse(
+        success=enhanced_response.success,
+        response=enhanced_response.response,
+        conversation_id=str(enhanced_response.conversation_id) if enhanced_response.conversation_id else "",
+        message_id=enhanced_response.message_id,
+        error=enhanced_response.error,
+        error_type=enhanced_response.error_type,
+    )
+
+
+# Legacy chat implementation removed - all chat now goes through enhanced_chat (/api/chat)
 
 
 # =============================================================================
@@ -694,6 +554,91 @@ async def get_failed_recordings(
 # Transcription Only (for Dojo Training)
 # =============================================================================
 
+def _normalize_speaker_labels(segments: List[Dict[str, Any]]) -> List["TranscribeSegment"]:
+    """
+    Normalize speaker labels to agent/supporter using talk-time heuristics.
+    
+    Uses the same logic as the full analysis pipeline:
+    1. Agent typically speaks MORE (guiding the conversation)
+    2. First speaker as tiebreaker if talk times are close
+    
+    Returns list of TranscribeSegment for API response.
+    """
+    if not segments:
+        return []
+    
+    # Calculate talk time per speaker
+    speaker_talk_time = {}
+    first_speaker = None
+    
+    for seg in segments:
+        speaker = seg.get("speaker", "SPEAKER_00")
+        
+        # If already labelled as agent/supporter, use simple mapping
+        if speaker in ["agent", "supporter"] or speaker.startswith("agent_"):
+            return _simple_normalize_segments(segments)
+        
+        duration = seg.get("end", 0) - seg.get("start", 0)
+        speaker_talk_time[speaker] = speaker_talk_time.get(speaker, 0) + duration
+        
+        if first_speaker is None:
+            first_speaker = speaker
+    
+    if not speaker_talk_time:
+        return _simple_normalize_segments(segments)
+    
+    # Determine agent: speaker with most talk time
+    sorted_speakers = sorted(speaker_talk_time.items(), key=lambda x: x[1], reverse=True)
+    most_talkative = sorted_speakers[0][0]
+    
+    # Use first speaker as tiebreaker if talk times are close (within 20%)
+    if len(sorted_speakers) > 1:
+        ratio = sorted_speakers[1][1] / sorted_speakers[0][1] if sorted_speakers[0][1] > 0 else 0
+        if ratio > 0.8:
+            agent_speaker = first_speaker
+            logger.debug(f"Talk times close ({ratio:.2f}), using first speaker as agent")
+        else:
+            agent_speaker = most_talkative
+            logger.debug(f"Using most talkative speaker as agent ({sorted_speakers[0][1]:.1f}s)")
+    else:
+        agent_speaker = most_talkative
+    
+    # Build normalized segment list
+    normalized = []
+    for seg in segments:
+        speaker = seg.get("speaker", "SPEAKER_00")
+        speaker_label = "agent" if speaker == agent_speaker else "supporter"
+        
+        normalized.append(TranscribeSegment(
+            start=seg.get("start", 0.0),
+            end=seg.get("end", 0.0),
+            text=seg.get("text", ""),
+            speaker=speaker_label
+        ))
+    
+    return normalized
+
+
+def _simple_normalize_segments(segments: List[Dict[str, Any]]) -> List["TranscribeSegment"]:
+    """Simple fallback normalization using SPEAKER_00 = agent."""
+    normalized = []
+    for seg in segments:
+        speaker = seg.get("speaker", "SPEAKER_00")
+        if speaker in ["SPEAKER_00", "agent"] or speaker.startswith("agent_"):
+            speaker_label = "agent"
+        else:
+            speaker_label = "supporter"
+        
+        normalized.append(TranscribeSegment(
+            start=seg.get("start", 0.0),
+            end=seg.get("end", 0.0),
+            text=seg.get("text", ""),
+            speaker=speaker_label
+        ))
+    
+    return normalized
+
+
 class TranscribeRequest(BaseModel):
     """Request to transcribe a call without full analysis."""
     apex_id: str
@@ -760,22 +705,8 @@ async def transcribe_call(request: TranscribeRequest):
     if transcription_lock.status == TranscriptionStatus.COMPLETED and transcription_lock.full_transcript:
         logger.info(f"Returning cached transcription for apex_id {apex_id}")
         
-        # Map speaker labels for response (SPEAKER_00 -> agent, SPEAKER_01 -> supporter)
-        segments = []
-        for seg in transcription_lock.segments:
-            speaker = seg.get("speaker", "SPEAKER_00")
-            # Simple mapping: first speaker is agent, second is supporter
-            if speaker in ["SPEAKER_00", "agent"]:
-                speaker_label = "agent"
-            else:
-                speaker_label = "supporter"
-                
-            segments.append(TranscribeSegment(
-                start=seg.get("start", 0.0),
-                end=seg.get("end", 0.0),
-                text=seg.get("text", ""),
-                speaker=speaker_label
-            ))
+        # Normalize speaker labels using talk-time heuristics
+        segments = _normalize_speaker_labels(transcription_lock.segments)
         
         return TranscribeResponse(
             success=True,
@@ -864,21 +795,9 @@ async def transcribe_call(request: TranscribeRequest):
                 
                 logger.info(f"Saved new transcription for apex_id {apex_id}")
                 
-                # Map speaker labels for response
-                segments = []
-                for seg in result["segments"]:
-                    speaker = seg.get("speaker", "SPEAKER_00")
-                    if speaker in ["SPEAKER_00", "agent"]:
-                        speaker_label = "agent"
-                    else:
-                        speaker_label = "supporter"
-                        
-                    segments.append(TranscribeSegment(
-                        start=seg.get("start", 0.0),
-                        end=seg.get("end", 0.0),
-                        text=seg.get("text", ""),
-                        speaker=speaker_label
-                    ))
+                # Normalize speaker labels using talk-time heuristics
+                # (same logic as full analysis pipeline)
+                segments = _normalize_speaker_labels(result["segments"])
                 
                 return TranscribeResponse(
                     success=True,
@@ -1127,7 +1046,7 @@ async def generate_summary(request: SummaryGenerateRequest):
         if request.campaign:
             top_agents_query += " AND r.campaign = %s"
             top_params.append(request.campaign)
-        top_agents_query += " GROUP BY r.agent_name, r.halo_id HAVING call_count >= 3 ORDER BY avg_quality DESC LIMIT 5"
+        top_agents_query += " GROUP BY r.agent_name, r.halo_id HAVING call_count >= 1 ORDER BY avg_quality DESC LIMIT 5"
         
         top_agents = db.fetch_all(top_agents_query, tuple(top_params))
         data["top_agents"] = [
@@ -1482,6 +1401,10 @@ class TrainingStatusResponse(BaseModel):
     ready_for_training: bool = False
     ready_reason: str = ""
     available_versions: List[Dict[str, Any]] = []
+    # Training in-progress tracking
+    training_in_progress: bool = False
+    training_started_at: Optional[str] = None
+    training_adapter_name: Optional[str] = None
 
 
 @router.get(
@@ -1497,6 +1420,7 @@ async def get_training_status(
     
     Shows when the adapter was last trained and if new annotations are available.
     Includes list of all available versions for rollback.
+    Also checks if training is currently in progress.
     """
     from src.services.trainer import TrainingService
     
@@ -1508,6 +1432,9 @@ async def get_training_status(
         versions = trainer.list_versions()
         current_version = trainer.get_current_version_name()
         
+        # Check if training is in progress
+        in_progress, lock_info = TrainingService.is_training_in_progress()
+        
         if metadata:
             return TrainingStatusResponse(
                 adapter_exists=True,
@@ -1518,18 +1445,24 @@ async def get_training_status(
                 training_loss=metadata.get("training_loss"),
                 base_model=metadata.get("base_model"),
                 new_annotations_since_training=new_count,
-                ready_for_training=should_train,
-                ready_reason=reason,
+                ready_for_training=should_train and not in_progress,
+                ready_reason=reason if not in_progress else "Training already in progress",
                 available_versions=versions,
+                training_in_progress=in_progress,
+                training_started_at=lock_info.get("started_at") if lock_info else None,
+                training_adapter_name=lock_info.get("adapter_name") if lock_info else None,
             )
         else:
             return TrainingStatusResponse(
                 adapter_exists=False,
                 adapter_name=adapter_name,
                 new_annotations_since_training=new_count,
-                ready_for_training=should_train,
-                ready_reason=reason,
+                ready_for_training=should_train and not in_progress,
+                ready_reason=reason if not in_progress else "Training already in progress",
                 available_versions=versions,
+                training_in_progress=in_progress,
+                training_started_at=lock_info.get("started_at") if lock_info else None,
+                training_adapter_name=lock_info.get("adapter_name") if lock_info else None,
             )
     except Exception as e:
         logger.error(f"Failed to get training status: {e}")
@@ -1745,6 +1678,7 @@ async def cleanup_old_versions(request: CleanupVersionsRequest):
 class ClientConfigRequest(BaseModel):
     """Request to create/update client config."""
     client_ref: Optional[str] = None
+    campaign: Optional[str] = None
     config_type: str  # 'topics', 'agent_actions', 'performance_rubric', 'prompt', 'analysis_mode'
     config_data: dict
     is_active: bool = True
@@ -1754,6 +1688,7 @@ class ClientConfigResponse(BaseModel):
     """Response with client config."""
     id: int
     client_ref: Optional[str]
+    campaign: Optional[str] = None
     config_type: str
     config_data: dict
     is_active: bool
@@ -1765,28 +1700,53 @@ class ClientConfigResponse(BaseModel):
 )
 async def get_client_config(
     client_ref: Optional[str] = Query(default=None),
+    campaign: Optional[str] = Query(default=None),
     config_type: Optional[str] = Query(default=None)
 ):
-    """Get client configuration, falling back to global if not found."""
+    """
+    Get client configuration with fallback hierarchy.
+    
+    Lookup order:
+    1. Campaign-specific (client_ref + campaign)
+    2. Client-specific (client_ref only)
+    3. Global (no client_ref or campaign)
+    4. File-based defaults (call_analysis_config.json)
+    """
     from src.database import ClientConfig
+    import os
+    
+    # Load file-based defaults as final fallback
+    def get_file_defaults() -> dict:
+        config_path = "call_analysis_config.json"
+        if os.path.exists(config_path):
+            with open(config_path, "r", encoding="utf-8") as f:
+                return json.load(f)
+        return {}
+    
+    file_defaults = get_file_defaults()
     
     if config_type:
-        config_data = ClientConfig.get_config(client_ref, config_type)
+        config_data = ClientConfig.get_config(client_ref, config_type, campaign)
+        if config_data is None:
+            # Fall back to file-based config
+            config_data = file_defaults.get(config_type)
         if config_data is None:
             raise HTTPException(status_code=404, detail="Configuration not found")
         
-        return {"config_type": config_type, "config_data": config_data}
+        return {"config_type": config_type, "config_data": config_data, "source": "database" if ClientConfig.get_config(client_ref, config_type, campaign) else "file"}
     
     # Return all config types
     config_types = ["topics", "agent_actions", "performance_rubric", "prompt", "analysis_mode"]
     result = {}
     
     for ct in config_types:
-        config_data = ClientConfig.get_config(client_ref, ct)
+        config_data = ClientConfig.get_config(client_ref, ct, campaign)
         if config_data:
-            result[ct] = config_data
+            result[ct] = {"data": config_data, "source": "database"}
+        elif file_defaults.get(ct):
+            result[ct] = {"data": file_defaults[ct], "source": "file"}
     
-    return {"client_ref": client_ref, "configs": result}
+    return {"client_ref": client_ref, "campaign": campaign, "configs": result}
 
 
 @router.post(
@@ -1795,7 +1755,7 @@ async def get_client_config(
     dependencies=[Depends(verify_token)]
 )
 async def create_client_config(request: ClientConfigRequest):
-    """Create or update a client configuration."""
+    """Create or update a client/campaign configuration."""
     from src.database import ClientConfig
     
     valid_types = ["topics", "agent_actions", "performance_rubric", "prompt", "analysis_mode"]
@@ -1807,6 +1767,7 @@ async def create_client_config(request: ClientConfigRequest):
     
     config = ClientConfig(
         client_ref=request.client_ref,
+        campaign=request.campaign,
         config_type=request.config_type,
         config_data=request.config_data,
         is_active=request.is_active,
@@ -1816,6 +1777,7 @@ async def create_client_config(request: ClientConfigRequest):
     return ClientConfigResponse(
         id=config_id,
         client_ref=request.client_ref,
+        campaign=request.campaign,
         config_type=request.config_type,
         config_data=request.config_data,
         is_active=request.is_active,
@@ -1831,7 +1793,7 @@ async def delete_client_config(config_id: int):
     db = get_db_connection()
     
     result = db.execute("""
-        UPDATE ai_client_configs
+        UPDATE ai_configs
         SET is_active = FALSE, updated_at = NOW()
         WHERE id = %s
     """, (config_id,))
@@ -1840,6 +1802,305 @@ async def delete_client_config(config_id: int):
         raise HTTPException(status_code=404, detail="Configuration not found")
     
     return {"message": "Configuration deactivated"}
+
+
+# =============================================================================
+# Three-Tier Configuration API (v2)
+# =============================================================================
+
+class UniversalConfigRequest(BaseModel):
+    """Request to save universal config."""
+    topics: List[str] = []
+    agent_actions: List[str] = []
+    performance_rubric: List[str] = []
+
+
+class UniversalConfigResponse(BaseModel):
+    """Response with universal config."""
+    topics: List[str]
+    agent_actions: List[str]
+    performance_rubric: List[str]
+    source: str = "database"
+
+
+class ClientContextRequest(BaseModel):
+    """Request to save client context config."""
+    client_ref: str
+    config_data: dict  # Dynamic structure
+
+
+class ClientContextResponse(BaseModel):
+    """Response with client context."""
+    client_ref: str
+    config_data: dict
+    prompt_context: str  # How it appears in prompts
+    source: str = "database"  # "database" or "universal_fallback"
+    # Effective arrays (with overrides applied)
+    effective_topics: List[str] = []
+    effective_agent_actions: List[str] = []
+    effective_performance_rubric: List[str] = []
+
+
+class CampaignTypeRequest(BaseModel):
+    """Request to save campaign type config."""
+    campaign_type: str
+    config_data: dict  # Dynamic structure
+
+
+class CampaignTypeResponse(BaseModel):
+    """Response with campaign type config."""
+    campaign_type: str
+    config_data: dict
+    prompt_context: str  # How it appears in prompts
+    source: str = "database"  # "database" or "universal_fallback"
+    # Effective arrays (with overrides applied)
+    effective_topics: List[str] = []
+    effective_agent_actions: List[str] = []
+    effective_performance_rubric: List[str] = []
+
+
+class MergedConfigResponse(BaseModel):
+    """Response with merged three-tier config."""
+    universal: UniversalConfigResponse
+    client: Optional[ClientContextResponse] = None
+    campaign_type: Optional[CampaignTypeResponse] = None
+    prompt_context: str  # Combined context for LLM prompts
+    # Effective arrays (with overrides applied)
+    effective_topics: List[str] = []
+    effective_agent_actions: List[str] = []
+    effective_performance_rubric: List[str] = []
+
+
+@router.post(
+    "/api/v2/config/universal",
+    response_model=UniversalConfigResponse,
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def save_universal_config(request: UniversalConfigRequest):
+    """
+    Save universal configuration.
+    
+    This updates the standard analysis framework used for all calls.
+    """
+    from src.services.config import get_config_service, UniversalConfig
+    
+    config_service = get_config_service()
+    
+    config = UniversalConfig(
+        topics=request.topics,
+        agent_actions=request.agent_actions,
+        performance_rubric=request.performance_rubric
+    )
+    
+    config_service.save_universal_config(config)
+    
+    return UniversalConfigResponse(
+        topics=config.topics,
+        agent_actions=config.agent_actions,
+        performance_rubric=config.performance_rubric,
+        source="database"
+    )
+
+
+@router.get(
+    "/api/v2/config/clients",
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def list_clients_with_config():
+    """List all clients that have configurations."""
+    from src.services.config import get_config_service
+    
+    config_service = get_config_service()
+    clients = config_service.list_clients()
+    
+    return {"clients": clients, "count": len(clients)}
+
+
+@router.post(
+    "/api/v2/config/client/{client_ref}",
+    response_model=ClientContextResponse,
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def save_client_context(client_ref: str, request: ClientContextRequest):
+    """
+    Save client-specific context configuration.
+    
+    Structure is flexible - include any fields that help contextualise analysis.
+    
+    Common fields:
+    - organisation_name: Name of the charity/organisation
+    - organisation_type: Type (e.g., "charity", "nonprofit")
+    - mission: Mission statement
+    - tone_guidelines: How agents should communicate
+    - compliance_notes: Special compliance requirements
+    """
+    from src.services.config import get_config_service, ClientConfig
+    
+    if request.client_ref != client_ref:
+        raise HTTPException(status_code=400, detail="client_ref in path and body must match")
+    
+    config_service = get_config_service()
+    config_service.save_client_config(client_ref, request.config_data)
+    
+    # Retrieve saved config
+    client = config_service.get_client_config(client_ref, use_cache=False)
+    
+    return ClientContextResponse(
+        client_ref=client.client_ref,
+        config_data=client.config_data,
+        prompt_context=client.to_prompt_context()
+    )
+
+
+@router.delete(
+    "/api/v2/config/client/{client_ref}",
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def delete_client_context(client_ref: str):
+    """Deactivate client configuration."""
+    db = get_db_connection()
+    
+    result = db.execute("""
+        UPDATE ai_configs
+        SET is_active = FALSE, updated_at = NOW()
+        WHERE config_tier = 'client' AND client_ref = %s
+    """, (client_ref,))
+    
+    if result == 0:
+        raise HTTPException(status_code=404, detail=f"No configuration found for client '{client_ref}'")
+    
+    return {"message": f"Configuration for client '{client_ref}' deactivated"}
+
+
+@router.get(
+    "/api/v2/config/campaign-types",
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def list_campaign_types():
+    """List all campaign types with configurations."""
+    from src.services.config import get_config_service
+    
+    config_service = get_config_service()
+    campaign_types = config_service.list_campaign_types()
+    
+    return {"campaign_types": campaign_types, "count": len(campaign_types)}
+
+
+@router.post(
+    "/api/v2/config/campaign-type/{campaign_type}",
+    response_model=CampaignTypeResponse,
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def save_campaign_type_config(campaign_type: str, request: CampaignTypeRequest):
+    """
+    Save campaign type configuration.
+    
+    Campaign types are reusable templates that define call expectations.
+    
+    Common fields:
+    - description: What this campaign type is
+    - goals: List of goals for this type of call
+    - success_criteria: What defines success
+    - key_metrics: What to measure
+    - agent_expectations: Expectations for agent behaviour
+    """
+    from src.services.config import get_config_service
+    
+    if request.campaign_type != campaign_type:
+        raise HTTPException(status_code=400, detail="campaign_type in path and body must match")
+    
+    config_service = get_config_service()
+    config_service.save_campaign_type_config(campaign_type, request.config_data)
+    
+    # Retrieve saved config
+    campaign = config_service.get_campaign_type_config(campaign_type, use_cache=False)
+    
+    return CampaignTypeResponse(
+        campaign_type=campaign.campaign_type,
+        config_data=campaign.config_data,
+        prompt_context=campaign.to_prompt_context()
+    )
+
+
+@router.delete(
+    "/api/v2/config/campaign-type/{campaign_type}",
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def delete_campaign_type_config(campaign_type: str):
+    """Deactivate campaign type configuration."""
+    db = get_db_connection()
+    
+    result = db.execute("""
+        UPDATE ai_configs
+        SET is_active = FALSE, updated_at = NOW()
+        WHERE config_tier = 'campaign_type' AND campaign_type = %s
+    """, (campaign_type,))
+    
+    if result == 0:
+        raise HTTPException(status_code=404, detail=f"No configuration found for campaign type '{campaign_type}'")
+    
+    return {"message": f"Configuration for campaign type '{campaign_type}' deactivated"}
+
+
+@router.get(
+    "/api/v2/config/merged",
+    response_model=MergedConfigResponse,
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def get_merged_config(
+    client_ref: Optional[str] = Query(default=None),
+    campaign_type: Optional[str] = Query(default=None)
+):
+    """
+    Get merged three-tier configuration for a specific context.
+    
+    Combines:
+    1. Universal config (always included)
+    2. Client config (if client_ref provided)
+    3. Campaign type config (if campaign_type provided)
+    
+    Returns the combined prompt_context that would be used in LLM prompts.
+    """
+    from src.services.config import get_config_service
+    
+    config_service = get_config_service()
+    merged = config_service.get_merged_config(client_ref, campaign_type)
+    
+    universal = merged["universal"]
+    client = merged.get("client")
+    campaign = merged.get("campaign_type")
+    
+    return MergedConfigResponse(
+        universal=UniversalConfigResponse(
+            topics=universal.topics,
+            agent_actions=universal.agent_actions,
+            performance_rubric=universal.performance_rubric,
+            source="database" if universal.topics else "file"
+        ),
+        client=ClientContextResponse(
+            client_ref=client.client_ref,
+            config_data=client.config_data,
+            prompt_context=client.to_prompt_context()
+        ) if client else None,
+        campaign_type=CampaignTypeResponse(
+            campaign_type=campaign.campaign_type,
+            config_data=campaign.config_data,
+            prompt_context=campaign.to_prompt_context()
+        ) if campaign else None,
+        prompt_context=merged.get("prompt_context", ""),
+        # Effective arrays (with overrides applied)
+        effective_topics=merged.get("topics", []),
+        effective_agent_actions=merged.get("agent_actions", []),
+        effective_performance_rubric=merged.get("performance_rubric", [])
+    )
 
 
 # =============================================================================
@@ -1870,6 +2131,14 @@ class EnhancedChatResponse(BaseModel):
     error_type: Optional[str] = None
 
 
+# Request deduplication cache to prevent double saves
+# Key: (user_id, message_hash, conversation_id) -> (timestamp, response)
+import time as _time
+import hashlib as _hashlib
+_chat_request_cache: Dict[str, tuple] = {}
+_CHAT_DEDUP_WINDOW = 5  # seconds
+
+
 @router.post(
     "/api/chat",
     response_model=EnhancedChatResponse,
@@ -1889,6 +2158,28 @@ async def enhanced_chat(request: EnhancedChatRequest):
     from src.database import ChatConversation, ChatMessage
     from src.services.interactive import get_interactive_service
     import json
+    import uuid
+    
+    # Generate unique request ID for tracing
+    request_id = str(uuid.uuid4())[:8]
+    logger.info(f"[CHAT-{request_id}] enhanced_chat called with message: {request.message[:50]}...")
+    
+    # Deduplication check - prevent double processing of same message within window
+    user_id = request.user.id if request.user else request.user_id
+    msg_hash = _hashlib.md5(request.message.encode()).hexdigest()[:16]
+    dedup_key = f"{user_id}:{msg_hash}:{request.conversation_id or 'new'}"
+    
+    current_time = _time.time()
+    if dedup_key in _chat_request_cache:
+        cached_time, cached_response = _chat_request_cache[dedup_key]
+        if current_time - cached_time < _CHAT_DEDUP_WINDOW:
+            logger.warning(f"[CHAT-{request_id}] Duplicate request detected (key={dedup_key}), returning cached response")
+            return cached_response
+    
+    # Clean old entries from cache (simple cleanup)
+    expired_keys = [k for k, (t, _) in _chat_request_cache.items() if current_time - t > 60]
+    for k in expired_keys:
+        del _chat_request_cache[k]
     
     db = get_db_connection()
     conversation_id = None
@@ -1928,15 +2219,17 @@ async def enhanced_chat(request: EnhancedChatRequest):
                 title="New Conversation",  # Pulse will update this later
             )
             conversation_id = conversation.save()
-            logger.info(f"Created new conversation {conversation_id} for user {user_id} ({user_name})")
+            logger.info(f"[CHAT-{request_id}] Created new conversation {conversation_id} for user {user_id} ({user_name})")
         
         # Save user message
+        logger.info(f"[CHAT-{request_id}] Saving user message to conversation {conversation_id}")
         user_message = ChatMessage(
             ai_chat_conversation_id=conversation_id,
             role="user",
             content=request.message,
         )
         user_message.save()
+        logger.info(f"[CHAT-{request_id}] User message saved with id {user_message.id}")
         
         # Build context from filtered data
         context_parts = []
@@ -2060,6 +2353,7 @@ async def enhanced_chat(request: EnhancedChatRequest):
         response_text = result["response"]
         
         # Save assistant message
+        logger.info(f"[CHAT-{request_id}] Saving assistant message to conversation {conversation_id}")
         assistant_message = ChatMessage(
             ai_chat_conversation_id=conversation_id,
             role="assistant",
@@ -2067,14 +2361,16 @@ async def enhanced_chat(request: EnhancedChatRequest):
             metadata={
                 "context_calls": context_calls,
                 "function_calls": result.get("function_calls", []),
+                "request_id": request_id,  # Track which request saved this
             },
         )
         assistant_message_id = assistant_message.save()
+        logger.info(f"[CHAT-{request_id}] Assistant message saved with id {assistant_message_id}")
         
         # Commit transaction - all records saved atomically
         db.execute("COMMIT")
         
-        return EnhancedChatResponse(
+        response = EnhancedChatResponse(
             success=True,
             response=response_text,
             conversation_id=conversation_id,
@@ -2088,6 +2384,11 @@ async def enhanced_chat(request: EnhancedChatRequest):
                 "format": "markdown",
             }
         )
+        
+        # Cache the response for deduplication
+        _chat_request_cache[dedup_key] = (current_time, response)
+        
+        return response
         
     except HTTPException:
         raise

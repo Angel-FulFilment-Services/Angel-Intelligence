@@ -14,11 +14,13 @@ import json
 import logging
 import os
 import time
+import uuid
 from typing import Dict, Any, List, Optional
 
 import torch
 
 from src.config import get_settings
+from src.database.models import calculate_quality_score, get_quality_zone
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +131,11 @@ class AnalysisService:
         self._chat_model = None
         self._chat_processor = None
         
-        # Load configuration
+        # Config service for three-tier configuration
+        from src.services.config import get_config_service
+        self._config_service = get_config_service()
+        
+        # Legacy: Load config for backwards compatibility
         self._config = self._load_config()
         
         mode_desc = "vLLM API" if self.llm_api_url else f"local ({self.device})"
@@ -324,7 +330,9 @@ class AnalysisService:
         self, 
         audio_path: Optional[str],
         transcript: Dict[str, Any],
-        recording_id: int
+        recording_id: int,
+        client_ref: Optional[str] = None,
+        campaign_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Analyse a call recording.
@@ -333,6 +341,8 @@ class AnalysisService:
             audio_path: Path to audio file (required for audio mode)
             transcript: Transcript dictionary from transcription service
             recording_id: Database recording ID
+            client_ref: Client reference for client-specific config (optional)
+            campaign_type: Campaign type for campaign-specific config (optional)
             
         Returns:
             Analysis results dictionary
@@ -347,9 +357,9 @@ class AnalysisService:
             return self._mock_analysis(speaker_metrics, start_time)
         
         if self.analysis_mode == "audio" and audio_path:
-            return self._analyse_audio(audio_path, transcript, speaker_metrics, start_time)
+            return self._analyse_audio(audio_path, transcript, speaker_metrics, start_time, client_ref, campaign_type)
         else:
-            return self._analyse_transcript(transcript, speaker_metrics, start_time)
+            return self._analyse_transcript(transcript, speaker_metrics, start_time, client_ref, campaign_type)
     
     def _calculate_speaker_metrics(self, transcript: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate metrics for each speaker matching specification format."""
@@ -399,15 +409,69 @@ class AnalysisService:
             }
         
         return formatted_metrics
+    
+    def _format_transcript_with_timestamps(self, transcript: Dict[str, Any]) -> tuple[str, Dict[str, Dict]]:
+        """
+        Format transcript segments with timestamps and IDs for LLM analysis.
         
-        return formatted_metrics
+        Uses existing segment_id from transcript (added by transcriber service).
+        Produces format like:
+        [seg_001] [0.0s - 15.2s] Agent: Good morning, thank you for calling...
+        [seg_002] [15.2s - 22.5s] Supporter: Hello, I wanted to ask about...
+        
+        Returns:
+            tuple: (formatted_transcript_string, segment_map)
+                - segment_map: {segment_id: {"start": float, "end": float, "speaker": str}}
+        """
+        segments = transcript.get("segments", [])
+        
+        if not segments:
+            # Fall back to plain text if no segments
+            return transcript.get("full_transcript", ""), {}
+        
+        formatted_lines = []
+        segment_map = {}
+        
+        for i, seg in enumerate(segments):
+            start = seg.get("start", 0)
+            end = seg.get("end", 0)
+            speaker = seg.get("speaker", "Unknown")
+            text = seg.get("text", "").strip()
+            
+            if not text:
+                continue
+            
+            # Use existing segment_id from transcript, or fall back to index-based
+            segment_id = seg.get("segment_id") or f"seg_{i+1:03d}"
+            
+            # Normalise speaker label for readability
+            if speaker in ["SPEAKER_00", "agent"] or speaker.startswith("agent"):
+                speaker_label = "Agent"
+            elif speaker in ["SPEAKER_01", "supporter"] or speaker.startswith("supporter"):
+                speaker_label = "Supporter"
+            else:
+                speaker_label = speaker.title()
+            
+            # Build segment map for reference
+            segment_map[segment_id] = {
+                "start": start,
+                "end": end,
+                "speaker": speaker_label.lower()
+            }
+            
+            # Format with segment ID and timestamp
+            formatted_lines.append(f"[{segment_id}] [{start:.1f}s - {end:.1f}s] {speaker_label}: {text}")
+        
+        return "\n".join(formatted_lines), segment_map
     
     def _analyse_audio(
         self, 
         audio_path: str, 
         transcript: Dict[str, Any],
         speaker_metrics: Dict[str, Any],
-        start_time: float
+        start_time: float,
+        client_ref: Optional[str] = None,
+        campaign_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """Analyse call using audio directly."""
         try:
@@ -476,7 +540,9 @@ class AnalysisService:
         self, 
         transcript: Dict[str, Any],
         speaker_metrics: Dict[str, Any],
-        start_time: float
+        start_time: float,
+        client_ref: Optional[str] = None,
+        campaign_type: Optional[str] = None
     ) -> Dict[str, Any]:
         """Analyse call using transcript text only (with text-only model or API)."""
         try:
@@ -484,16 +550,37 @@ class AnalysisService:
             if not self.llm_api_url:
                 self._ensure_text_model_loaded()
             
-            full_text = transcript.get("full_transcript", "")
+            # Format transcript with timestamps and segment IDs for the LLM
+            formatted_transcript, segment_map = self._format_transcript_with_timestamps(transcript)
             
-            # Build prompt
-            prompt = self._build_transcript_analysis_prompt(full_text)
+            # Calculate max timestamp from segments for validation
+            segments = transcript.get("segments", [])
+            max_timestamp = max((seg.get("end", 0) for seg in segments), default=0)
+            
+            # Get merged config for this context
+            merged_config = self._config_service.get_merged_config(client_ref, campaign_type)
+            
+            # Build prompt with context and merged config (includes overrides)
+            prompt = self._build_transcript_analysis_prompt(
+                formatted_transcript, 
+                max_timestamp,
+                prompt_context=merged_config.get("prompt_context", ""),
+                merged_config=merged_config
+            )
+            
+            # Log transcript info for debugging
+            segment_count = len(segments)
+            logger.info(f"Transcript: {segment_count} segments, {len(segment_map)} mapped, max_ts={max_timestamp:.1f}s, {len(prompt)} chars prompt")
             
             # Generate analysis using text-only model or API
             response = self._generate_text_only_response(prompt)
             
             # Parse response
             result = self._parse_analysis_response(response, speaker_metrics)
+            
+            # Enrich segment_ids with timestamps from the segment_map
+            result = self._enrich_segment_timestamps(result, segment_map)
+            
             result["processing_time"] = time.time() - start_time
             result["analysis_type"] = "transcript_api" if self.llm_api_url else "transcript"
             
@@ -784,7 +871,8 @@ Analyse this audio recording segment for:
 4. PROFESSIONALISM: Overall professional conduct
 5. SUPPORTER EXPERIENCE: How the supporter seems to feel
 6. TOPICS: What subjects are being discussed
-7. ACTIONS: What the agent is doing"""
+7. ACTIONS: What the agent is doing
+8. SCORE IMPACTS: Moments that positively or negatively affect call quality"""
 
         user_prompt = f"""Analyse this call recording audio.
 
@@ -803,6 +891,9 @@ Return ONLY valid JSON matching this structure:
     "professionalism": 1-10,
     "detected_topics": ["topics heard in this segment"],
     "detected_actions": ["actions performed by agent"],
+    "score_impacts": [
+        {{"impact": -5 to +5, "category": "Empathy/Clarity/Listening/Rapport_building", "reason": "why this affected the score"}}
+    ],
     "performance_scores": {{
         "Empathy": 1-10,
         "Clarity": 1-10,
@@ -811,9 +902,17 @@ Return ONLY valid JSON matching this structure:
     }},
     "detected_issues": ["any compliance or quality issues"],
     "positive_indicators": ["things the agent did well"],
-    "sentiment_score": -10 to +10,
+    "sentiment_score": 0 to 10,
     "brief_observation": "One sentence observation about this segment"
 }}
+
+SCORE IMPACT SCALE:
+- +5: Exceptional moment
+- +3 to +4: Strong positive
+- +1 to +2: Minor positive
+- -1 to -2: Minor negative
+- -3 to -4: Significant negative
+- -5: Severe issue
 
 Return ONLY the JSON object, no other text."""
 
@@ -872,27 +971,54 @@ Return ONLY the JSON object, no other text."""
             logger.error(f"Chunk analysis failed: {e}")
             return self._default_chunk_analysis()
     
-    def _build_transcript_analysis_prompt(self, transcript: str) -> str:
+    def _build_transcript_analysis_prompt(self, transcript: str, max_timestamp: float = 0, prompt_context: str = "", merged_config: Optional[Dict[str, Any]] = None) -> str:
         """Build prompt for transcript-based analysis."""
-        topics = self._config.get("topics", [])
-        actions = self._config.get("agent_actions", [])
-        rubric = self._config.get("performance_rubric", [])
+        # Use merged config if provided (includes overrides from client/campaign_type)
+        if merged_config:
+            topics = merged_config.get("topics", [])
+            actions = merged_config.get("agent_actions", [])
+            rubric = merged_config.get("performance_rubric", [])
+        else:
+            # Fallback to universal config directly
+            universal = self._config_service.get_universal_config()
+            topics = universal.topics or self._config.get("topics", [])
+            actions = universal.agent_actions or self._config.get("agent_actions", [])
+            rubric = universal.performance_rubric or self._config.get("performance_rubric", [])
         
         # Build topic and action lists for the prompt - use full lists from config
         topic_list = ", ".join(topics) if topics else "donation, gift aid, regular giving, complaints, updates, account changes, direct debit, legacy giving, event registration, volunteer enquiry"
         action_list = ", ".join(actions) if actions else "greeting, verification, explanation, objection handling, closing, upselling, complaint resolution, payment processing"
         rubric_list = ", ".join([r.get("name", r) if isinstance(r, dict) else r for r in rubric]) if rubric else "Empathy, Clarity, Listening, Script adherence, Product knowledge, Rapport building, Objection handling, Closing effectiveness"
         
+        # Convert rubric items to valid JSON keys for performance_scores
+        def to_key(name: str) -> str:
+            """Convert rubric name to valid JSON key."""
+            if isinstance(name, dict):
+                name = name.get("name", "")
+            return name.replace(" ", "_").replace("&", "and").replace("/", "_")
+        
+        perf_keys = [to_key(r) for r in rubric] if rubric else [
+            "Empathy", "Clarity", "Listening", "Script_adherence",
+            "Product_knowledge", "Rapport_building", "Objection_handling", "Closing_effectiveness"
+        ]
+        perf_keys_list = ", ".join(perf_keys)
+        perf_scores_json = ",\n        ".join([f'"{k}": 1-10' for k in perf_keys])
+        
         # Optionally truncate transcript for smaller models
         if self.max_transcript_length > 0:
             transcript = transcript[:self.max_transcript_length]
             # Use simplified prompt for constrained models
-            return self._build_simple_analysis_prompt(transcript, topic_list, rubric_list)
+            return self._build_simple_analysis_prompt(transcript, topic_list, perf_keys, perf_keys_list, max_timestamp, prompt_context)
+        
+        # Build context section
+        context_section = f"\n\n{prompt_context}\n" if prompt_context else ""
         
         return f"""You are an expert call quality analyst for charity supporter engagement calls.
 Analyse this transcript thoroughly and provide detailed coaching insights.
+{context_section}
+CALL DURATION: {max_timestamp:.1f} seconds
 
-TRANSCRIPT:
+TRANSCRIPT (each line has [segment_id] [start - end] Speaker: text):
 {transcript}
 
 TOPICS TO IDENTIFY: {topic_list}
@@ -903,131 +1029,149 @@ Return your analysis as valid JSON matching this exact structure:
 
 {{
     "summary": "2-3 sentence British English summary describing the call purpose, outcome, and notable moments",
-    "sentiment_score": -10 to +10 (negative=hostile, 0=neutral, positive=friendly),
-    "quality_score": 0 to 100 (overall call quality rating),
+    "sentiment_score": 0 to 10 (0=hostile, 5=neutral, 10=very friendly),
     "key_topics": [
-        {{"name": "topic from the list above", "confidence": 0.0-1.0}}
+        {{"name": "Topic Name In Title Case", "confidence": 0.0-1.0}}
     ],
-    "agent_actions_performed": [
-        {{"action": "specific action the agent took", "timestamp_start": 0.0, "quality": 1-5}}
+    "agent_actions": [
+        {{"action": "specific action the agent took", "segment_id": "seg_001"}}
+    ],
+    "score_impacts": [
+        {{"segment_id": "seg_001", "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote from transcript"}}
+    ],
+    "compliance_flags": [
+        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_id": "seg_001", "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
     ],
     "performance_scores": {{
-        "Empathy": 1-10,
-        "Clarity": 1-10,
-        "Listening": 1-10,
-        "Script_adherence": 1-10,
-        "Product_knowledge": 1-10,
-        "Rapport_building": 1-10,
-        "Objection_handling": 1-10,
-        "Closing_effectiveness": 1-10
+        {perf_scores_json}
     }},
     "action_items": [
         {{"description": "specific follow-up action needed", "priority": "high/medium/low"}}
-    ],
-    "compliance_flags": [
-        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "issue": "detailed description of the specific compliance concern", "severity": "low/medium/high/critical", "timestamp_start": 0.0, "timestamp_end": 0.0}}
-    ],
-    "improvement_areas": [
-        {{
-            "area": "specific skill or behaviour needing improvement",
-            "description": "detailed explanation of what went wrong and exactly how to improve",
-            "priority": "high/medium/low",
-            "examples": ["direct quote from transcript showing the issue"]
-        }}
     ]
 }}
 
 ANALYSIS GUIDANCE:
-- Be thorough in identifying improvement areas - this is used for agent coaching
+- ANALYSE THE ENTIRE TRANSCRIPT from start to finish - do not focus only on the beginning
+- Capture actions from all parts of the call: opening, middle, AND closing sections
+- Use the segment_id (e.g., "seg_001") from the transcript - copy it exactly
 - Include specific quotes from the transcript as evidence
-- Score performance honestly - most calls should score 60-80, not 90+
 - Flag any compliance issues: GDPR, payment security, misleading information, rudeness
 - Identify: rushing, interrupting, poor listening, weak objection handling, unclear explanations, lack of empathy, missed upsell opportunities
 
-ARRAY LIMITS (do not exceed):
-- key_topics: maximum 5 items
-- agent_actions_performed: maximum 8 items
-- action_items: maximum 5 items
-- compliance_flags: (ONLY include actual issues found - use empty array [] if no issues)
-- improvement_areas: maximum 5 items
+AGENT ACTIONS (neutral identification):
+- Simply identify WHAT the agent did and WHEN - no judgement
+- Use the segment_id to reference where in the call this happened
+- Examples: "Greeted supporter", "Verified identity", "Explained Gift Aid", "Handled objection", "Closed call"
 
-IMPORTANT FOR COMPLIANCE FLAGS:
-- ONLY include compliance_flags if there is an ACTUAL issue detected
+SCORE IMPACTS (quality judgements):
+- Identify specific moments that POSITIVELY or NEGATIVELY affected the call quality
+- Use the "impact" field from -5 to +5:
+  - +5: Exceptional - exemplary moment, could be used as training example
+  - +3 to +4: Strong positive - notably good handling
+  - +1 to +2: Minor positive - good practice observed
+  - -1 to -2: Minor negative - could improve
+  - -3 to -4: Significant negative - clear problem
+  - -5: Severe negative - major issue affecting call quality
+- "category" MUST be one of: {perf_keys_list}
+- Include the exact "quote" from the transcript showing this moment
+- Compliance issues should ALSO appear in score_impacts with negative impact (-3 to -5)
+
+COMPLIANCE FLAGS (separate for alerting):
+- ONLY include if there is an ACTUAL compliance issue detected
 - If NO compliance issues are found, use an empty array: "compliance_flags": []
-- DO NOT create entries saying "No issues found" - just leave the array empty
-- Include timestamp_start and timestamp_end for each issue (approximate seconds in the call)
+- Types: GDPR, payment_security, misleading_info, rudeness, data_protection
+- Severity: low (minor procedural issue), medium (needs attention), high (serious breach), critical (immediate action required)
+- These issues should ALSO appear in score_impacts with appropriate negative impact
+
+ARRAY LIMITS (do not exceed):
+- key_topics: maximum 5 items, use Title Case (e.g., "Regular Giving", "Gift Aid", "Direct Debit")
+- agent_actions: maximum 15 items (capture key actions throughout the entire call)
+- score_impacts: maximum 15 items (focus on most significant positive and negative moments)
+- action_items: maximum 5 items
+- compliance_flags: only actual issues found - use empty array [] if none
+
+SEGMENT IDs - CRITICAL:
+- Copy segment_id values EXACTLY from the transcript (e.g., "seg_001", "seg_015")
+- Each segment_id references a specific line in the transcript above
+- Do NOT invent segment IDs - only use ones that appear in the transcript
 
 CRITICAL RULES:
 - Each array item must be unique - DO NOT repeat yourself
 - Return ONLY valid JSON - no text before or after the JSON object
 - Stop generating immediately after the final closing brace"""
     
-    def _build_simple_analysis_prompt(self, transcript: str, topic_list: str, rubric_list: str) -> str:
+    def _build_simple_analysis_prompt(self, transcript: str, topic_list: str, perf_keys: list, perf_keys_list: str, max_timestamp: float = 0, prompt_context: str = "") -> str:
         """Simplified prompt for smaller models (3B-7B) - outputs full structure."""
+        # Build performance_scores example with dynamic keys
+        perf_scores_example = ",\n        ".join([f'"{k}": 7' for k in perf_keys[:8]])  # Limit to 8 for readability
+        
+        # Build context section
+        context_section = f"\n{prompt_context}\n" if prompt_context else ""
+        
         return f"""You are a call quality analyst. Analyse this charity supporter call transcript.
+{context_section}
+CALL DURATION: {max_timestamp:.1f} seconds
 
-TRANSCRIPT:
+TRANSCRIPT (each line: [segment_id] [start - end] Speaker: text):
 {transcript}
 
 Return your analysis as valid JSON matching this EXACT structure:
 
 {{
     "summary": "2-3 sentence summary describing what happened in the call, its purpose and outcome",
-    "sentiment_score": 5,
-    "quality_score": 75,
+    "sentiment_score": 7,
     "key_topics": [
-        {{"name": "Regular giving", "confidence": 0.9}},
+        {{"name": "Regular Giving", "confidence": 0.9}},
         {{"name": "Gift Aid", "confidence": 0.8}}
     ],
-    "agent_actions_performed": [
-        {{"action": "Greeted supporter", "timestamp_start": 0.0, "timestamp_end": 5.0, "quality": 4}},
-        {{"action": "Verified identity", "timestamp_start": 15.0, "timestamp_end": 20.0, "quality": 4}}
+    "agent_actions": [
+        {{"action": "Greeted supporter", "segment_id": "seg_001"}},
+        {{"action": "Verified identity", "segment_id": "seg_005"}},
+        {{"action": "Explained donation options", "segment_id": "seg_012"}},
+        {{"action": "Closed call", "segment_id": "seg_025"}}
     ],
+    "score_impacts": [
+        {{"segment_id": "seg_001", "impact": 3, "category": "{perf_keys[0] if perf_keys else 'Empathy'}", "reason": "Warm, friendly greeting", "quote": "Good morning, lovely to speak with you!"}},
+        {{"segment_id": "seg_015", "impact": -2, "category": "{perf_keys[2] if len(perf_keys) > 2 else 'Listening'}", "reason": "Interrupted supporter", "quote": "Yes but what I meant was--"}}
+    ],
+    "compliance_flags": [],
     "performance_scores": {{
-        "Empathy": 7,
-        "Clarity": 7,
-        "Listening": 7,
-        "Script_adherence": 7,
-        "Product_knowledge": 7,
-        "Rapport_building": 7,
-        "Objection_handling": 7,
-        "Closing_effectiveness": 7
+        {perf_scores_example}
     }},
     "action_items": [
         {{"description": "Send confirmation email", "priority": "high"}}
-    ],
-    "compliance_flags": [
-        {{"type": "GDPR", "issue": "Description of actual issue found", "severity": "low", "timestamp_start": 0.0, "timestamp_end": 0.0}}
-    ],
-    "improvement_areas": [
-        {{
-            "area": "Skill name",
-            "description": "What needs improvement and how",
-            "priority": "medium",
-            "examples": ["Quote from transcript"]
-        }}
     ]
 }}
 
 SCORING GUIDE:
-- sentiment_score: -10 (hostile) to +10 (very friendly), 0 is neutral
-- quality_score: 0-100 (most calls score 60-85)
+- sentiment_score: 0 (hostile) to 10 (very friendly), 5 is neutral
 - confidence: 0.0 to 1.0
 - performance scores: 1-10 for each criterion
-- quality (for actions): 1-5
+- impact (for score_impacts): -5 to +5
+  - +5: Exceptional moment
+  - +3 to +4: Strong positive
+  - +1 to +2: Minor positive
+  - -1 to -2: Minor negative
+  - -3 to -4: Significant negative
+  - -5: Severe issue
+
+SCORE IMPACT CATEGORIES (must use exactly):
+{perf_keys_list}
 
 TOPICS TO IDENTIFY: {topic_list}
-PERFORMANCE CRITERIA: {rubric_list}
 
 CRITICAL RULES:
 1. Use lowercase field names with underscores exactly as shown
 2. Include empty arrays [] if no items found (don't omit fields)
-3. MAXIMUM array sizes: key_topics (3), agent_actions_performed (5), action_items (3), improvement_areas (3)
+3. MAXIMUM array sizes: key_topics (3), agent_actions (5), score_impacts (8), action_items (3)
 4. DO NOT repeat yourself - each item in an array must be unique
 5. Keep descriptions concise - one sentence maximum
 6. Return ONLY the JSON object, no text before or after
 7. Stop generating after the final closing brace
-8. For compliance_flags: ONLY include ACTUAL issues - use empty array [] if no issues found. DO NOT add entries saying "No issues found"."""
+8. For compliance_flags: ONLY include ACTUAL issues - use empty array [] if no issues found
+9. Use Title Case for topic names (e.g., "Regular Giving", "Gift Aid", "Direct Debit")
+10. Compliance issues should ALSO appear in score_impacts with negative impact
+11. SEGMENT IDs - copy exactly from transcript (e.g., "seg_001") - do NOT invent them"""
     
     def _generate_text_response(self, prompt: str) -> str:
         """Generate text response from model."""
@@ -1093,10 +1237,10 @@ CRITICAL RULES:
         speaker_metrics: Dict[str, Any]
     ) -> Dict[str, Any]:
         """Parse analysis response into structured format."""
-        # DEBUG: Log the raw response
-        logger.info(f"=== RAW LLM RESPONSE START ===")
-        logger.info(response)
-        logger.info(f"=== RAW LLM RESPONSE END ===")
+        # Log truncated response for debugging (full response at DEBUG level)
+        response_preview = response[:500] + "..." if len(response) > 500 else response
+        logger.info(f"LLM response received ({len(response)} chars): {response_preview}")
+        logger.debug(f"Full LLM response: {response}")
         
         try:
             start = response.find('{')
@@ -1135,21 +1279,25 @@ CRITICAL RULES:
                     # Convert to: {"Empathy": 8}
                     perf_scores = {perf_scores["criterion_name"]: perf_scores["score"]}
                 
+                # Extract score_impacts and calculate quality_score
+                score_impacts = parsed.get("score_impacts", [])
+                quality_score = self._calculate_quality_score(score_impacts)
+                
                 # Ensure all required fields with correct naming
                 result = {
                     "summary": parsed.get("summary", parsed.get("summarized", "Analysis completed")),
-                    "sentiment_score": self._extract_number(parsed.get("sentiment_score", 0)),
-                    "quality_score": self._extract_number(parsed.get("quality_score", parsed.get("quality_scor", 50))),
-                    "key_topics": parsed.get("key_topics", parsed.get("key_topic", [])),
-                    "agent_actions_performed": parsed.get("agent_actions_performed", parsed.get("agent_action", [])),
+                    "sentiment_score": self._extract_number(parsed.get("sentiment_score", 5)),
+                    "quality_score": quality_score,
+                    "key_topics": self._add_keys_to_array(parsed.get("key_topics", parsed.get("key_topic", []))),
+                    "agent_actions": parsed.get("agent_actions", []),
+                    "score_impacts": self._add_keys_to_array(score_impacts),
                     "performance_scores": perf_scores,
                     "action_items": parsed.get("action_items", []),
-                    "compliance_flags": parsed.get("compliance_flags", []),
-                    "improvement_areas": parsed.get("improvement_areas", []),
+                    "compliance_flags": self._add_keys_to_array(parsed.get("compliance_flags", [])),
                     "speaker_metrics": speaker_metrics,
                     "model_used": self.analysis_model_path,
                 }
-                logger.info(f"Parsed analysis: summary='{result['summary'][:50]}...', quality={result['quality_score']}")
+                logger.info(f"Parsed analysis: summary='{result['summary'][:50]}...', quality={result['quality_score']:.1f}% (from {len(score_impacts)} impacts)")
                 return result
             else:
                 logger.warning("No JSON object found in model response")
@@ -1160,6 +1308,80 @@ CRITICAL RULES:
             return self._fallback_parse_response(response, speaker_metrics)
         
         return self._empty_analysis(speaker_metrics, 0)
+    
+    def _enrich_segment_timestamps(self, result: Dict[str, Any], segment_map: Dict[str, Dict]) -> Dict[str, Any]:
+        """
+        Enrich segment_id references with actual timestamps from the segment_map.
+        
+        The LLM outputs segment_id values (e.g., "seg_001"), and we look up the 
+        actual start/end timestamps from the transcript segments.
+        
+        This ensures timestamps are always accurate since they come from the 
+        original transcript, not from LLM hallucination.
+        """
+        if not segment_map:
+            return result
+        
+        enriched_count = 0
+        invalid_count = 0
+        
+        def enrich(item: Dict) -> Dict:
+            nonlocal enriched_count, invalid_count
+            segment_id = item.get("segment_id")
+            if segment_id and segment_id in segment_map:
+                seg_info = segment_map[segment_id]
+                item["timestamp_start"] = seg_info["start"]
+                item["timestamp_end"] = seg_info["end"]
+                enriched_count += 1
+            elif segment_id:
+                # Invalid segment_id - set to 0
+                logger.debug(f"Invalid segment_id '{segment_id}' not in transcript")
+                item["timestamp_start"] = 0.0
+                item["timestamp_end"] = 0.0
+                invalid_count += 1
+            return item
+        
+        # Enrich agent_actions
+        for action in result.get("agent_actions", []):
+            if isinstance(action, dict):
+                enrich(action)
+        
+        # Enrich score_impacts
+        for impact in result.get("score_impacts", []):
+            if isinstance(impact, dict):
+                enrich(impact)
+        
+        # Enrich compliance_flags
+        for flag in result.get("compliance_flags", []):
+            if isinstance(flag, dict):
+                enrich(flag)
+        
+        if enriched_count > 0 or invalid_count > 0:
+            logger.info(f"Enriched {enriched_count} segment references with timestamps ({invalid_count} invalid segment_ids)")
+        
+        return result
+    
+    def _calculate_quality_score(self, score_impacts: List[Dict[str, Any]]) -> float:
+        """
+        Calculate quality score from score impacts.
+        Delegates to shared function in models.py.
+        """
+        return calculate_quality_score(score_impacts)
+    
+    def _add_keys_to_array(self, items: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        """
+        Add a unique 'key' field (UUID v4) to each item in an array.
+        
+        This is needed by the frontend for React list rendering.
+        """
+        if not items or not isinstance(items, list):
+            return items
+        
+        for item in items:
+            if isinstance(item, dict) and "key" not in item:
+                item["key"] = str(uuid.uuid4())
+        
+        return items
     
     def _fallback_parse_response(
         self,
@@ -1181,17 +1403,21 @@ CRITICAL RULES:
         if sentiment_match:
             result["sentiment_score"] = float(sentiment_match.group(1))
         
-        # Extract quality_score (handle variations)
-        quality_match = re.search(r'"(?:quality_score|Quality_Score|quality)"\s*:\s*(\d+(?:\.\d+)?)', response)
-        if quality_match:
-            result["quality_score"] = float(quality_match.group(1))
-        
         # Try to extract arrays by finding valid JSON subarrays (handle variations)
-        result["key_topics"] = self._extract_json_array(response, "key_topics") or self._extract_json_array(response, "Key_Topics")
-        result["agent_actions_performed"] = self._extract_json_array(response, "agent_actions_performed") or self._extract_json_array(response, "Agent_Actions")
+        result["key_topics"] = self._add_keys_to_array(
+            self._extract_json_array(response, "key_topics") or self._extract_json_array(response, "Key_Topics") or []
+        )
+        result["agent_actions"] = self._extract_json_array(response, "agent_actions") or self._extract_json_array(response, "Agent_Actions")
+        result["score_impacts"] = self._add_keys_to_array(
+            self._extract_json_array(response, "score_impacts") or self._extract_json_array(response, "Score_Impacts") or []
+        )
         result["action_items"] = self._extract_json_array(response, "action_items") or self._extract_json_array(response, "Action_Items")
-        result["compliance_flags"] = self._extract_json_array(response, "compliance_flags") or self._extract_json_array(response, "compliance_issues") or self._extract_json_array(response, "Compliance_Issues")
-        result["improvement_areas"] = self._extract_json_array(response, "improvement_areas") or self._extract_json_array(response, "Improvement_Areas")
+        result["compliance_flags"] = self._add_keys_to_array(
+            self._extract_json_array(response, "compliance_flags") or self._extract_json_array(response, "compliance_issues") or self._extract_json_array(response, "Compliance_Issues") or []
+        )
+        
+        # Calculate quality_score from score_impacts
+        result["quality_score"] = self._calculate_quality_score(result["score_impacts"])
         
         # Try to extract performance_scores object (handle variations)
         perf_match = re.search(r'"(?:performance_scores|Performance_Scores)"\s*:\s*(\{[^}]+\})', response)
@@ -1208,7 +1434,7 @@ CRITICAL RULES:
         result["model_used"] = self.analysis_model_path
         result["analysis_type"] = "transcript_partial"
         
-        extracted_count = sum(1 for k in ["summary", "key_topics", "agent_actions_performed", "action_items", "improvement_areas"] 
+        extracted_count = sum(1 for k in ["summary", "key_topics", "agent_actions", "score_impacts", "action_items"] 
                               if result.get(k) and result[k] != "Analysis unavailable" and result[k] != [])
         logger.info(f"Fallback extraction: recovered {extracted_count} fields from malformed JSON")
         
@@ -1408,7 +1634,7 @@ CRITICAL RULES:
             return self._empty_analysis(speaker_metrics, 0)
         
         # Average numeric scores
-        sentiment_scores = [c.get("sentiment_score", 0) for c in chunk_analyses]
+        sentiment_scores = [c.get("sentiment_score", 5) for c in chunk_analyses]
         clarity_scores = [c.get("speech_clarity", 7) for c in chunk_analyses]
         professionalism_scores = [c.get("professionalism", 7) for c in chunk_analyses]
         
@@ -1419,6 +1645,7 @@ CRITICAL RULES:
         # Collect all items
         all_topics = []
         all_actions = []
+        all_score_impacts = []
         all_issues = []
         all_positives = []
         observations = []
@@ -1427,6 +1654,7 @@ CRITICAL RULES:
         for c in chunk_analyses:
             all_topics.extend(c.get("detected_topics", []))
             all_actions.extend(c.get("detected_actions", []))
+            all_score_impacts.extend(c.get("score_impacts", []))
             all_issues.extend(c.get("detected_issues", []))
             all_positives.extend(c.get("positive_indicators", []))
             if c.get("brief_observation"):
@@ -1452,8 +1680,11 @@ CRITICAL RULES:
         dominant_agent_emotion = max(set(agent_emotions), key=agent_emotions.count) if agent_emotions else "calm"
         dominant_supporter_emotion = max(set(supporter_emotions), key=supporter_emotions.count) if supporter_emotions else "calm"
         
-        # Calculate quality score
-        quality_score = self._sentiment_to_quality(avg_sentiment)
+        # Calculate quality score from score_impacts (or fallback to sentiment-based)
+        if all_score_impacts:
+            quality_score = self._calculate_quality_score(all_score_impacts)
+        else:
+            quality_score = self._sentiment_to_quality(avg_sentiment)
         
         # Build summary
         summary = " ".join(observations[:3]) if observations else "Audio analysis completed."
@@ -1464,10 +1695,10 @@ CRITICAL RULES:
             for t in list(set(all_topics))[:10]
         ]
         
-        # Format actions for database (using spec format)
-        agent_actions_performed = [
-            {"action": a, "timestamp_start": 0.0, "quality": 4}
-            for a in list(set(all_actions))[:10]
+        # Format actions for database (neutral identification)
+        agent_actions = [
+            {"action": a, "timestamp_start": 0.0, "timestamp_end": 0.0}
+            for a in list(set(all_actions))[:15]
         ]
         
         return {
@@ -1475,10 +1706,11 @@ CRITICAL RULES:
             "sentiment_score": round(avg_sentiment, 1),
             "quality_score": round(quality_score, 1),
             "key_topics": key_topics,
-            "agent_actions_performed": agent_actions_performed,
+            "agent_actions": agent_actions,
+            "score_impacts": all_score_impacts[:15],  # Limit to 15 most significant
             "performance_scores": final_performance_scores,
             "action_items": [],
-            "compliance_flags": [{"type": "issue", "issue": i, "severity": "medium"} for i in list(set(all_issues))[:5]],
+            "compliance_flags": [{"type": "issue", "issue": i, "severity": "medium", "timestamp_start": 0.0, "timestamp_end": 0.0} for i in list(set(all_issues))[:5]],
             "speaker_metrics": speaker_metrics,
             "audio_observations": {
                 "call_quality": "good" if avg_clarity >= 7 else "fair" if avg_clarity >= 5 else "poor",
@@ -1491,21 +1723,20 @@ CRITICAL RULES:
         }
     
     def _sentiment_to_quality(self, sentiment: float) -> float:
-        """Convert sentiment score (-10 to +10) to quality score (0 to 100)."""
-        if sentiment >= 8:
-            return 95 + (sentiment - 8) * 2.5
+        """Convert sentiment score (0 to 10) to quality score (0 to 100)."""
+        # Scale: 0=hostile, 5=neutral, 10=very friendly
+        if sentiment >= 9:
+            return 95 + (sentiment - 9) * 5
+        elif sentiment >= 7:
+            return 80 + (sentiment - 7) * 7.5
         elif sentiment >= 5:
-            return 85 + (sentiment - 5) * 3
-        elif sentiment >= 2:
-            return 70 + (sentiment - 2) * 4.67
-        elif sentiment >= -1:
-            return 50 + (sentiment + 1) * 6.33
-        elif sentiment >= -4:
-            return 30 + (sentiment + 4) * 6.33
-        elif sentiment >= -7:
-            return 10 + (sentiment + 7) * 6.33
+            return 60 + (sentiment - 5) * 10
+        elif sentiment >= 3:
+            return 40 + (sentiment - 3) * 10
+        elif sentiment >= 1:
+            return 20 + (sentiment - 1) * 10
         else:
-            return max(0, min(9, (sentiment + 10) * 3))
+            return max(0, sentiment * 20)
     
     def _default_chunk_analysis(self) -> Dict[str, Any]:
         """Default chunk analysis when processing fails."""
@@ -1517,10 +1748,11 @@ CRITICAL RULES:
             "professionalism": 7,
             "detected_topics": [],
             "detected_actions": [],
+            "score_impacts": [],
             "performance_scores": {},
             "detected_issues": [],
             "positive_indicators": [],
-            "sentiment_score": 0,
+            "sentiment_score": 5,
             "brief_observation": "Analysis unavailable for this segment",
         }
     
@@ -1532,11 +1764,12 @@ CRITICAL RULES:
         """Empty analysis when processing fails."""
         return {
             "summary": "Analysis unavailable",
-            "sentiment_score": 0,
+            "sentiment_score": 5,
             "sentiment_label": "neutral",
-            "quality_score": 50.0,
+            "quality_score": 65.0,  # Baseline score
             "key_topics": [],
-            "agent_actions_performed": [],
+            "agent_actions": [],
+            "score_impacts": [],
             "performance_scores": {},
             "action_items": [],
             "compliance_flags": [],
@@ -1559,45 +1792,49 @@ CRITICAL RULES:
         Returns deterministic test data matching the full specification.
         All text uses British English.
         """
+        # Mock score impacts that would produce ~82% quality score
+        mock_score_impacts = [
+            {"timestamp_start": 0.0, "timestamp_end": 12.0, "impact": 4, "category": "Rapport_building", "reason": "Warm, personalised greeting", "quote": "Good morning, lovely to speak with you today!"},
+            {"timestamp_start": 15.0, "timestamp_end": 30.0, "impact": 2, "category": "Script_adherence", "reason": "Proper identity verification", "quote": "Could I just confirm your postcode please?"},
+            {"timestamp_start": 45.0, "timestamp_end": 90.0, "impact": 3, "category": "Product_knowledge", "reason": "Clear explanation of giving options", "quote": "We have several ways you can support us..."},
+            {"timestamp_start": 120.0, "timestamp_end": 180.0, "impact": 4, "category": "Clarity", "reason": "Excellent Gift Aid explanation", "quote": "Gift Aid means we can claim an extra 25p for every pound you donate..."},
+            {"timestamp_start": 200.0, "timestamp_end": 240.0, "impact": 2, "category": "Empathy", "reason": "Acknowledged supporter's generosity", "quote": "That's really wonderful, thank you so much for your support."},
+            {"timestamp_start": 280.0, "timestamp_end": 300.0, "impact": 3, "category": "Closing_effectiveness", "reason": "Strong professional close", "quote": "Thank you again for your time today. Take care!"},
+        ]
+        
         return {
             "summary": "The supporter enquired about regular giving options. The agent explained the monthly donation programme and successfully enrolled the supporter at £10 per month with Gift Aid.",
             "sentiment_score": 7.5,
             "sentiment_label": "positive",
-            "quality_score": 85.0,
-            "key_topics": [
-                {"name": "Regular giving signup", "confidence": 0.95, "timestamp_start": 45.5, "timestamp_end": 78.2},
-                {"name": "Gift Aid explanation/enrolment", "confidence": 0.88, "timestamp_start": 120.0, "timestamp_end": 180.5},
-                {"name": "Donation completion/payment processing", "confidence": 0.82, "timestamp_start": 200.0, "timestamp_end": 245.0},
+            "quality_score": self._calculate_quality_score(mock_score_impacts),
+            "key_topics": self._add_keys_to_array([
+                {"name": "Regular Giving", "confidence": 0.95},
+                {"name": "Gift Aid", "confidence": 0.88},
+                {"name": "Payment Processing", "confidence": 0.82},
+            ]),
+            "agent_actions": [
+                {"action": "Greeted supporter", "timestamp_start": 0.0, "timestamp_end": 12.0},
+                {"action": "Verified supporter identity", "timestamp_start": 15.0, "timestamp_end": 30.0},
+                {"action": "Explained charity mission", "timestamp_start": 45.0, "timestamp_end": 90.0},
+                {"action": "Explained Gift Aid", "timestamp_start": 120.0, "timestamp_end": 180.0},
+                {"action": "Processed donation payment", "timestamp_start": 200.0, "timestamp_end": 240.0},
+                {"action": "Closed call professionally", "timestamp_start": 280.0, "timestamp_end": 300.0},
             ],
-            "agent_actions_performed": [
-                {"action": "Greeted supporter", "timestamp_start": 0.0, "quality": 5},
-                {"action": "Verified supporter identity", "timestamp_start": 15.2, "quality": 4},
-                {"action": "Explained charity mission/programs", "timestamp_start": 45.5, "quality": 5},
-                {"action": "Requested regular giving signup", "timestamp_start": 120.5, "quality": 5},
-                {"action": "Processed donation payment", "timestamp_start": 200.0, "quality": 4},
-                {"action": "Thanked supporter for their time", "timestamp_start": 280.0, "quality": 5},
-            ],
+            "score_impacts": self._add_keys_to_array(mock_score_impacts),
             "performance_scores": {
-                "Clarity of speech": 8,
-                "Tone control": 9,
-                "Active listening": 7,
-                "Empathy & rapport": 8,
-                "Confidence & authority": 7,
-                "Accurate information delivery": 9,
-                "Script/protocol adherence": 8,
-                "Payment and data protection compliance": 10,
-                "Recording of mandatory information": 9,
-                "Call structure/flow control": 7,
-                "Quality of donation ask or conversion attempt": 8,
-                "Objection handling skill": 6,
-                "Engagement effectiveness": 8,
-                "Problem solving": 7,
-                "Effective closing": 8,
+                "Empathy": 8,
+                "Clarity": 9,
+                "Listening": 7,
+                "Script_adherence": 8,
+                "Product_knowledge": 9,
+                "Rapport_building": 8,
+                "Objection_handling": 6,
+                "Closing_effectiveness": 8,
             },
             "action_items": [
-                {"description": "Send confirmation email with Gift Aid declaration", "priority": "high", "due_date": "2026-01-20"},
+                {"description": "Send confirmation email with Gift Aid declaration", "priority": "high"},
             ],
-            "compliance_flags": [],
+            "compliance_flags": [],  # Empty - no keys needed
             "speaker_metrics": speaker_metrics if speaker_metrics else {
                 "agent": {
                     "talk_time_seconds": 245,

@@ -175,12 +175,14 @@ class CallProcessor:
             # Step 5.5: Unload transcription models to free GPU for analysis
             self.transcriber.unload()
             
-            # Step 6: Analyse (with client config)
+            # Step 6: Analyse (with client config and context)
             analysis_result = self._analyse(
                 audio_path, 
                 transcript_result, 
                 recording.id,
-                client_config
+                client_ref=recording.client_ref,
+                campaign_type=recording.campaign_type,
+                client_config=client_config
             )
             
             # Step 7: Save analysis
@@ -488,6 +490,8 @@ class CallProcessor:
         audio_path: str, 
         transcript: dict,
         recording_id: int,
+        client_ref: Optional[str] = None,
+        campaign_type: Optional[str] = None,
         client_config: Optional[Dict[str, Any]] = None
     ) -> Optional[dict]:
         """Analyse the call recording with optional client-specific config."""
@@ -495,7 +499,7 @@ class CallProcessor:
             logger.info("Analysis service not available - skipping")
             return None
         
-        logger.info(f"Analysing recording {recording_id}")
+        logger.info(f"Analysing recording {recording_id} (client={client_ref}, campaign={campaign_type})")
         
         # Pass client config to analyser if available
         if client_config:
@@ -509,20 +513,31 @@ class CallProcessor:
         return self.analyser.analyse(
             audio_path=audio_path,
             transcript=transcript,
-            recording_id=recording_id
+            recording_id=recording_id,
+            client_ref=client_ref,
+            campaign_type=campaign_type
         )
     
     def _save_analysis(self, recording: CallRecording, analysis: dict) -> int:
         """Save analysis to database."""
         logger.info(f"Saving analysis for recording {recording.id}")
         
+        # Import zone helper
+        from src.database.models import get_quality_zone
+        
+        # Calculate quality zone from score
+        quality_score = analysis.get("quality_score", 65.0)
+        quality_zone = get_quality_zone(quality_score)
+        
         analysis_record = CallAnalysis(
             ai_call_recording_id=recording.id,
             summary=analysis.get("summary", ""),
             sentiment_score=analysis.get("sentiment_score", 0),
-            quality_score=analysis.get("quality_score", 50),
+            quality_score=quality_score,
+            quality_zone=quality_zone,
             key_topics=analysis.get("key_topics", []),
-            agent_actions_performed=analysis.get("agent_actions_performed", analysis.get("agent_actions", [])),
+            agent_actions=analysis.get("agent_actions", []),
+            score_impacts=analysis.get("score_impacts", []),
             performance_scores=analysis.get("performance_scores", {}),
             action_items=analysis.get("action_items", []),
             compliance_flags=analysis.get("compliance_flags", []),

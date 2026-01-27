@@ -17,6 +17,81 @@ from src.database.connection import get_db_connection
 logger = logging.getLogger(__name__)
 
 
+# ============================================================================
+# Quality Score Calculation
+# ============================================================================
+
+def calculate_quality_score(score_impacts: List[Dict[str, Any]]) -> float:
+    """
+    Calculate quality score from score impacts using asymmetric curve.
+    
+    - Base score: 65% (neutral, meets expectations)
+    - Positive impacts: Diminishing returns (hard to reach 100%)
+    - Negative impacts: Linear penalty (easy to fall)
+    
+    Args:
+        score_impacts: List of impact dictionaries with 'impact' field (-5 to +5)
+        
+    Returns:
+        Quality score from 0 to 100
+        
+    Zones:
+    - Excellent: 90-100%
+    - Good: 75-89%
+    - Satisfactory: 65-74%
+    - Below Average: 50-64%
+    - Poor: 0-49%
+    """
+    if not score_impacts:
+        return 65.0  # Baseline for no impacts
+    
+    # Extract impact values
+    impacts = []
+    for item in score_impacts:
+        impact = item.get("impact", 0)
+        if isinstance(impact, (int, float)):
+            # Clamp to valid range
+            impacts.append(max(-5, min(5, impact)))
+    
+    if not impacts:
+        return 65.0
+    
+    avg_impact = sum(impacts) / len(impacts)
+    
+    if avg_impact >= 0:
+        # Diminishing returns for positives: gain = 35 * (avg/5)^0.6
+        gain = 35 * (avg_impact / 5) ** 0.6
+        score = 65 + gain
+    else:
+        # Linear penalty for negatives: 13 points per -1 avg impact
+        score = 65 + (avg_impact * 13)
+    
+    # Clamp to 0-100
+    return max(0, min(100, round(score, 1)))
+
+
+def get_quality_zone(score: float) -> str:
+    """
+    Get the quality zone label for a given score.
+    
+    Args:
+        score: Quality score from 0-100
+        
+    Returns:
+        Zone label: Excellent, Good, Satisfactory, Below Average, or Poor
+    """
+    if score >= 90:
+        return "Excellent"
+    elif score >= 75:
+        return "Good"
+    elif score >= 65:
+        return "Satisfactory"
+    elif score >= 50:
+        return "Below Average"
+    else:
+        return "Poor"
+
+
 class ProcessingStatus(Enum):
     """Processing status for call recordings."""
     PENDING = "pending"
@@ -41,6 +116,7 @@ class CallRecording:
     obref: Optional[str] = None               # Outbound reference number
     client_ref: Optional[str] = None          # Client reference code
     campaign: Optional[str] = None            # Campaign name
+    campaign_type: Optional[str] = None       # Campaign type for config lookup
     halo_id: Optional[int] = None             # Agent ID from Halo system
     agent_name: Optional[str] = None          # Agent display name
     creative: Optional[str] = None            # Creative name
@@ -74,6 +150,7 @@ class CallRecording:
             obref=row.get("obref"),
             client_ref=row.get("client_ref"),
             campaign=row.get("campaign"),
+            campaign_type=row.get("campaign_type"),
             halo_id=row.get("halo_id"),
             agent_name=row.get("agent_name"),
             creative=row.get("creative"),
@@ -439,13 +516,14 @@ class CallAnalysis:
     summary: str = ""
     sentiment_score: float = 0.0
     sentiment_label: str = "neutral"
+    quality_score: float = 65.0  # Baseline score
+    quality_zone: str = "Satisfactory"  # Excellent/Good/Satisfactory/Below Average/Poor
     key_topics: List[Dict[str, Any]] = field(default_factory=list)
-    agent_actions_performed: List[Dict[str, Any]] = field(default_factory=list)
+    agent_actions: List[Dict[str, Any]] = field(default_factory=list)
+    score_impacts: List[Dict[str, Any]] = field(default_factory=list)
     performance_scores: Dict[str, int] = field(default_factory=dict)
-    quality_score: float = 50.0
     action_items: List[Dict[str, Any]] = field(default_factory=list)
     compliance_flags: List[Dict[str, Any]] = field(default_factory=list)
-    improvement_areas: List[Dict[str, Any]] = field(default_factory=list)  # Key areas for agent improvement/coaching
     speaker_metrics: Dict[str, Any] = field(default_factory=dict)
     audio_analysis: Optional[Dict[str, Any]] = None
     model_used: str = ""
@@ -462,21 +540,22 @@ class CallAnalysis:
         
         # Prepare JSON fields
         key_topics_json = json.dumps(self.key_topics)
-        agent_actions_json = json.dumps(self.agent_actions_performed)
+        agent_actions_json = json.dumps(self.agent_actions)
+        score_impacts_json = json.dumps(self.score_impacts)
         performance_scores_json = json.dumps(self.performance_scores)
         action_items_json = json.dumps(self.action_items)
         compliance_flags_json = json.dumps(self.compliance_flags)
-        improvement_areas_json = json.dumps(self.improvement_areas)
         speaker_metrics_json = json.dumps(self.speaker_metrics)
         audio_analysis_json = json.dumps(self.audio_analysis) if self.audio_analysis else None
         
         self.id = db.insert("""
             INSERT INTO ai_call_analysis
             (ai_call_recording_id, summary, sentiment_score, sentiment_label,
-             key_topics, agent_actions_performed, performance_scores, quality_score,
-             action_items, compliance_flags, improvement_areas, speaker_metrics, audio_analysis,
+             key_topics, agent_actions, score_impacts, 
+             performance_scores, quality_score, quality_zone,
+             action_items, compliance_flags, speaker_metrics, audio_analysis,
              model_used, model_version, processing_time_seconds, created_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW())
         """, (
             self.ai_call_recording_id,
             self.summary,
@@ -484,11 +563,12 @@ class CallAnalysis:
             self.sentiment_label,
             key_topics_json,
             agent_actions_json,
+            score_impacts_json,
             performance_scores_json,
             self.quality_score,
+            self.quality_zone,
             action_items_json,
             compliance_flags_json,
-            improvement_areas_json,
             speaker_metrics_json,
             audio_analysis_json,
             self.model_used,
@@ -501,14 +581,14 @@ class CallAnalysis:
     
     @staticmethod
     def _score_to_label(score: float) -> str:
-        """Convert sentiment score (-10 to +10) to label."""
-        if score >= 6:
+        """Convert sentiment score (0 to 10) to label."""
+        if score >= 8:
             return "very_positive"
-        elif score >= 2:
+        elif score >= 6:
             return "positive"
-        elif score >= -2:
+        elif score >= 4:
             return "neutral"
-        elif score >= -6:
+        elif score >= 2:
             return "negative"
         else:
             return "very_negative"
@@ -728,18 +808,23 @@ class Summary:
         existing = Summary.get(feature, start_date, end_date, client_ref, campaign, agent_id)
         
         if existing:
-            # If generating and not timed out, return None (already in progress)
+            # If currently generating, check if it's timed out
             if existing.status == SummaryStatus.GENERATING:
-                # Check if it's been stuck for too long (timeout)
-                if existing.updated_at:
-                    from datetime import timedelta
-                    timeout_threshold = datetime.now() - timedelta(minutes=timeout_minutes)
-                    if existing.updated_at > timeout_threshold:
-                        # Still within timeout, generation in progress
-                        return None
+                from datetime import timedelta
+                timeout_threshold = datetime.now() - timedelta(minutes=timeout_minutes)
+                
+                # Check if still within timeout (generation in progress)
+                if existing.updated_at and existing.updated_at > timeout_threshold:
+                    # Still within timeout, block retry
+                    return None
+                elif not existing.updated_at:
+                    # No updated_at means just started, assume in progress
+                    return None
+                else:
                     # Timed out, allow retry
                     logger.warning(f"Summary generation timed out, allowing retry: {existing.id}")
             
+            # For FAILED, COMPLETED, or timed-out GENERATING - allow retry
             # Update existing to generating status
             existing.update_status(SummaryStatus.GENERATING)
             return existing
@@ -1022,12 +1107,13 @@ class VoiceFingerprint:
 @dataclass
 class ClientConfig:
     """
-    Model for ai_client_configs table.
+    Model for ai_configs table.
     
     Client-specific configuration overrides.
     """
     id: Optional[int] = None
     client_ref: Optional[str] = None  # NULL = global/default config
+    campaign: Optional[str] = None    # NULL = applies to all campaigns
     config_type: str = ""  # 'topics', 'agent_actions', 'performance_rubric', 'prompt', 'analysis_mode'
     config_data: Dict[str, Any] = field(default_factory=dict)
     is_active: bool = True
@@ -1041,15 +1127,16 @@ class ClientConfig:
         config_json = json.dumps(self.config_data)
         
         self.id = db.insert("""
-            INSERT INTO ai_client_configs
-            (client_ref, config_type, config_data, is_active, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, NOW(), NOW())
+            INSERT INTO ai_configs
+            (client_ref, campaign, config_type, config_data, is_active, created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, NOW(), NOW())
             ON DUPLICATE KEY UPDATE
              config_data = VALUES(config_data),
              is_active = VALUES(is_active),
              updated_at = NOW()
         """, (
             self.client_ref,
+            self.campaign,
             self.config_type,
             config_json,
             self.is_active,
@@ -1058,31 +1145,46 @@ class ClientConfig:
         return self.id
     
     @staticmethod
-    def get_config(client_ref: Optional[str], config_type: str) -> Optional[Dict[str, Any]]:
+    def get_config(
+        client_ref: Optional[str], 
+        config_type: str,
+        campaign: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
-        Get configuration for a client, falling back to global if not found.
+        Get configuration for a client/campaign, with fallback hierarchy.
         
         Lookup order:
-        1. Client-specific config (client_ref = 'XXX')
-        2. Global config (client_ref = NULL)
-        3. None (use file-based defaults)
+        1. Campaign-specific config (client_ref + campaign)
+        2. Client-specific config (client_ref, campaign = NULL)
+        3. Global config (client_ref = NULL, campaign = NULL)
+        4. None (use file-based defaults)
         """
         db = get_db_connection()
         
-        # Try client-specific first
+        # Try campaign-specific first (if both client and campaign provided)
+        if client_ref and campaign:
+            row = db.fetch_one("""
+                SELECT config_data FROM ai_configs
+                WHERE client_ref = %s AND campaign = %s AND config_type = %s AND is_active = TRUE
+            """, (client_ref, campaign, config_type))
+            
+            if row:
+                return json.loads(row["config_data"])
+        
+        # Try client-specific (campaign = NULL)
         if client_ref:
             row = db.fetch_one("""
-                SELECT config_data FROM ai_client_configs
-                WHERE client_ref = %s AND config_type = %s AND is_active = TRUE
+                SELECT config_data FROM ai_configs
+                WHERE client_ref = %s AND campaign IS NULL AND config_type = %s AND is_active = TRUE
             """, (client_ref, config_type))
             
             if row:
                 return json.loads(row["config_data"])
         
-        # Fall back to global
+        # Fall back to global (client_ref = NULL, campaign = NULL)
         row = db.fetch_one("""
-            SELECT config_data FROM ai_client_configs
-            WHERE client_ref IS NULL AND config_type = %s AND is_active = TRUE
+            SELECT config_data FROM ai_configs
+            WHERE client_ref IS NULL AND campaign IS NULL AND config_type = %s AND is_active = TRUE
         """, (config_type,))
         
         if row:
@@ -1091,9 +1193,9 @@ class ClientConfig:
         return None
     
     @staticmethod
-    def get_analysis_mode(client_ref: Optional[str]) -> Optional[str]:
-        """Get analysis mode override for client ('audio' or 'transcript')."""
-        config = ClientConfig.get_config(client_ref, "analysis_mode")
+    def get_analysis_mode(client_ref: Optional[str], campaign: Optional[str] = None) -> Optional[str]:
+        """Get analysis mode override for client/campaign ('audio' or 'transcript')."""
+        config = ClientConfig.get_config(client_ref, "analysis_mode", campaign)
         if config and "mode" in config:
             return config["mode"]
         return None

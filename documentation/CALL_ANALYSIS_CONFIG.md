@@ -2,7 +2,53 @@
 
 Guide to configuring topics, agent actions, and performance rubrics.
 
-## Configuration File
+## Three-Tier Configuration System
+
+Angel Intelligence uses a three-tier configuration system:
+
+| Tier | Structure | Storage | Purpose |
+|------|-----------|---------|---------|
+| **Universal** | Rigid | Database + file fallback | Standard analysis framework |
+| **Client** | Dynamic | Database only | Client-specific context |
+| **Campaign Type** | Dynamic | Database only | Reusable campaign goals |
+
+### Configuration Hierarchy
+
+When analysing a call:
+1. **Universal config** provides the analysis framework (topics, actions, rubric)
+2. **Client config** provides organisational context (charity info, tone guidelines)
+3. **Campaign type config** provides call-specific goals (success criteria, expectations)
+
+### API Endpoints (v2)
+
+```bash
+# Universal config
+GET  /api/v2/config/universal
+POST /api/v2/config/universal
+
+# Client configs
+GET  /api/v2/config/clients
+GET  /api/v2/config/client/{client_ref}
+POST /api/v2/config/client/{client_ref}
+DELETE /api/v2/config/client/{client_ref}
+
+# Campaign type configs
+GET  /api/v2/config/campaign-types
+GET  /api/v2/config/campaign-type/{campaign_type}
+POST /api/v2/config/campaign-type/{campaign_type}
+DELETE /api/v2/config/campaign-type/{campaign_type}
+
+# Merged config preview
+GET  /api/v2/config/merged?client_ref=ABC123&campaign_type=inbound_donation
+```
+
+---
+
+## Universal Configuration
+
+Universal config has a **rigid structure** - the same fields for all clients.
+
+### File-Based (Fallback)
 
 The main configuration file is `call_analysis_config.json` in the project root.
 
@@ -11,6 +57,124 @@ The main configuration file is `call_analysis_config.json` in the project root.
   "topics": [...],
   "agent_actions": [...],
   "performance_rubric": [...]
+}
+```
+
+### Database-Based (Preferred)
+
+```bash
+POST /api/v2/config/universal
+```
+
+```json
+{
+  "topics": ["One-off donation", "Regular giving signup", ...],
+  "agent_actions": ["greeting", "verification", "explanation", ...],
+  "performance_rubric": ["Empathy", "Clarity", "Listening", ...]
+}
+```
+
+---
+
+## Client Configuration
+
+Client config has a **dynamic structure** - different clients can have different fields.
+
+### Common Fields
+
+```json
+{
+  "organisation_name": "Cancer Research UK",
+  "organisation_type": "charity",
+  "mission": "Beat cancer through research and awareness",
+  "tone_guidelines": "Warm, empathetic, professional",
+  "compliance_notes": "FCA regulated for some activities"
+}
+```
+
+### Custom Fields
+
+Clients can add any fields they need:
+
+```json
+{
+  "organisation_name": "RSPCA",
+  "key_campaigns": ["winter appeal", "legacy giving"],
+  "prohibited_topics": ["euthanasia", "prosecution details"],
+  "vulnerable_caller_protocol": "Always offer callback"
+}
+```
+
+### API Example
+
+```bash
+POST /api/v2/config/client/CRUK001
+```
+
+```json
+{
+  "client_ref": "CRUK001",
+  "config_data": {
+    "organisation_name": "Cancer Research UK",
+    "mission": "Beat cancer through research and awareness",
+    "tone_guidelines": "Warm, empathetic, professional"
+  }
+}
+```
+
+---
+
+## Campaign Type Configuration
+
+Campaign types are **reusable templates** for different call types.
+
+### Common Campaign Types
+
+| Campaign Type | Description |
+|--------------|-------------|
+| `inbound_donation` | Incoming calls from supporters wanting to donate |
+| `outbound_upgrade` | Calls to upgrade existing donations |
+| `retention` | Calls to save cancelling supporters |
+| `welcome_call` | New supporter welcome calls |
+| `complaint` | Complaint handling calls |
+
+### Campaign Type Structure
+
+```json
+{
+  "description": "Calls to upgrade existing regular donors",
+  "goals": [
+    "Increase monthly donation amount",
+    "Maintain positive supporter relationship"
+  ],
+  "success_criteria": [
+    "Upgrade achieved",
+    "Gift Aid confirmed if eligible",
+    "Supporter remains positive"
+  ],
+  "key_metrics": [
+    "Upgrade rate",
+    "Average increase amount",
+    "Cancellation from call"
+  ],
+  "agent_expectations": "Listen actively, acknowledge current support, present upgrade positively"
+}
+```
+
+### API Example
+
+```bash
+POST /api/v2/config/campaign-type/outbound_upgrade
+```
+
+```json
+{
+  "campaign_type": "outbound_upgrade",
+  "config_data": {
+    "description": "Outbound upgrade calls",
+    "goals": ["Increase donation amount", "Maintain relationship"],
+    "success_criteria": ["Upgrade achieved", "Supporter positive"]
+  }
 }
 ```
 

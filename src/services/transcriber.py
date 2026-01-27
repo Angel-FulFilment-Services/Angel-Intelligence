@@ -9,6 +9,7 @@ import gc
 import logging
 import os
 import time
+import uuid
 from typing import Dict, Any, List, Optional
 
 import torch
@@ -290,6 +291,7 @@ class TranscriptionService:
         
         Format matches specification for karaoke feature:
         {
+            "segment_id": "seg_001",
             "text": "Hello, thank you for calling.",
             "start": 0.0,
             "end": 2.5,
@@ -303,8 +305,9 @@ class TranscriptionService:
         }
         """
         formatted = []
-        for segment in segments:
+        for i, segment in enumerate(segments):
             formatted_segment = {
+                "segment_id": f"seg_{i+1:03d}",  # Unique ID for this segment
                 "text": segment.get("text", segment.get("word", "")).strip(),
                 "start": round(segment.get("start", 0), 3),
                 "end": round(segment.get("end", 0), 3),

@@ -74,9 +74,14 @@ class InteractiveService:
         logger.info(f"InteractiveService initialised (mode={mode_desc})")
     
     def _ensure_model_loaded(self) -> None:
-        """Ensure the chat model is loaded."""
+        """Ensure the chat model is loaded (only needed for local inference)."""
         if self.use_mock:
             logger.debug("Using mock mode - skipping model load")
+            return
+        
+        # Skip loading if using external API
+        if self.llm_api_url:
+            logger.debug("Using external API - skipping local model load")
             return
         
         if self._model is not None:
@@ -183,12 +188,19 @@ class InteractiveService:
         
         api_endpoint = f"{self.llm_api_url.rstrip('/')}/chat/completions"
         
+        api_start = time.time()
+        logger.info(f"Sending to LLM API: {api_endpoint} (model: {model_name}, {len(messages)} messages)")
+        
         with httpx.Client(timeout=300.0) as client:
             response = client.post(api_endpoint, headers=headers, json=payload)
             response.raise_for_status()
             result = response.json()
         
-        return result["choices"][0]["message"]["content"]
+        api_duration = time.time() - api_start
+        content = result["choices"][0]["message"]["content"]
+        logger.info(f"LLM API response received: {len(content)} chars in {api_duration:.2f}s")
+        
+        return content
     
     def chat(
         self,
@@ -215,6 +227,7 @@ class InteractiveService:
             Dict with response text and metadata
         """
         start_time = time.time()
+        logger.info(f"Chat request received: '{message[:100]}{'...' if len(message) > 100 else ''}' (context: {len(context) if context else 0} chars)")
         
         if self.use_mock:
             return self._mock_chat(message, context)
@@ -231,7 +244,7 @@ Key guidelines:
 - **IMPORTANT**: Always use the full client name (client_name) when referring to clients, never show the shorthand code (client_ref) to users
 - Format responses using Markdown for better readability when providing detailed information
 - **IMPORTANT**: Match your response length and detail to the user's question:
-  * Simple greetings ("hello", "hi", "thanks") → Brief, friendly response (e.g., "Hi! How can I help you today?")
+  * Simple messages ("hello", "hi", "thanks", "perfect", "great") → Brief, natural response. Don't redirect or prompt for more questions.
   * Follow-up questions about previous responses → Answer based on conversation context
   * General questions → Concise overview with key points
   * Specific questions → Detailed analysis with relevant data
@@ -242,22 +255,21 @@ Key guidelines:
 - Professional and supportive tone
 
 **Conversation Behaviour:**
-- **ALWAYS respond to greetings and casual messages** - never ignore the user
+- **DO NOT greet the user unless they greet you first** - if their message is a question or statement, just answer it directly
+- **Only say "Hi" or "Hello" if the user's CURRENT message contains a greeting** - not based on previous messages
+- **Respond naturally to social cues** - "thank you" gets "You're welcome!" not a redirect to analysis
+- **Don't be pushy** - after answering a question, wait for the user's next request rather than prompting them
 - **Remember previous messages** - if the user asks a follow-up question, use conversation context
 - **Don't repeat yourself** - if you already provided data, refer to it rather than querying again
-- **Ask clarifying questions** when the user's intent is unclear
+- **Ask clarifying questions** when the user's intent is unclear about a data request
 - **Never auto-select or filter data** unless the user specifically asks you to
 
-**CRITICAL - Stay On Topic:**
-- Your ONLY purpose is to help analyse charity call recordings and donor interactions
-- ONLY answer questions related to: call quality, transcripts, sentiment, agent performance, donor interactions, call metrics, trends, or related analysis
-- REFUSE politely if asked about: general knowledge, personal advice, coding help, unrelated topics, or anything outside call/donor analysis
-- If unsure whether a question is relevant, err on the side of keeping it focused on call analysis
-- Example refusal: "I'm specifically designed to help with call quality analysis and donor interactions insights. I can't assist with that topic, but I'd be happy to help you analyse call recordings or review performance metrics instead."
+**Topic Focus:**
+- Your primary purpose is helping analyse charity call recordings and donor interactions
+- Relevant topics: call transcripts, quality scores, sentiment analysis, agent performance, donor behaviour, compliance checks, call topics, Gift Aid, objection handling, conversion rates, campaign effectiveness
+- For clearly off-topic requests (recipes, weather, coding help), politely redirect: "I'm designed to help with call analysis - happy to help with that instead!"
+- Don't redirect for: greetings, thank yous, acknowledgements, or casual rapport-building"""
 
-**Relevant topics:** call transcripts, quality scores, sentiment analysis, agent performance, donor behaviour, compliance checks, call topics, Gift Aid explanations, objection handling, conversion rates, campaign effectiveness
-**Off-limits:** general chat, recipes, weather, news, personal advice, technical support for unrelated systems"""
-        
         if context:
             system_prompt += f"\n\n**Available Data Context (use only when relevant to user's question):**\n{context}"
         
@@ -302,10 +314,14 @@ Key guidelines:
                 response_text = self._tokenizer.decode(response_tokens, skip_special_tokens=True)
                 tokens_used = len(response_tokens)
             
+            processing_time = time.time() - start_time
+            response_preview = response_text[:100] + '...' if len(response_text) > 100 else response_text
+            logger.info(f"Chat complete in {processing_time:.2f}s: '{response_preview}'")
+            
             return {
                 "response": response_text.strip(),
                 "tokens_used": tokens_used,
-                "processing_time": time.time() - start_time,
+                "processing_time": processing_time,
                 "model": self.settings.chat_model,
             }
             
@@ -423,13 +439,18 @@ FORMAT (use exactly these headers, keep each section brief):
 One paragraph, 2-3 sentences max. Bold the key numbers.
 
 ## Agents Needing Coaching
-Bullet list: name, score, calls. Maximum 5 agents. No commentary.
+Bullet list with CLEAR labels. Format exactly as: "- Name: XX% quality score (N calls)"
+Example: "- John Smith: 70% quality score (2 calls)"
+Maximum 5 agents. No commentary.
 
 ## Actions
 3-4 bullet points. One line each. Actionable and specific.
 
 RULES:
 - Maximum 150 words total
+- Always include units/labels (%, calls, etc.) - never bare numbers
+- **ONLY use data provided above** - do NOT invent agent names like "Agent 1" or make up statistics
+- If no agent data is provided, skip the Agents section entirely
 - No introductions or conclusions
 - No filler phrases
 - Do not repeat data already shown
@@ -441,24 +462,29 @@ RULES:
         ]
         
         try:
-            inputs = self._tokenizer.apply_chat_template(
-                messages,
-                return_tensors="pt",
-                add_generation_prompt=True
-            ).to(self._device)
-            
-            with torch.no_grad():
-                outputs = self._model.generate(
-                    inputs,
-                    max_new_tokens=400,  # Strict limit for concise output
-                    do_sample=True,
-                    temperature=0.5,  # Lower temp for more focused output
-                    top_p=0.9,
-                    pad_token_id=self._tokenizer.eos_token_id,
-                )
-            
-            response_tokens = outputs[0][inputs.shape[1]:]
-            response_text = self._tokenizer.decode(response_tokens, skip_special_tokens=True)
+            # Use external API if configured, otherwise local model
+            if self.llm_api_url:
+                response_text = self._generate_via_api(messages, max_tokens=400, temperature=0.5)
+            else:
+                # Local model generation
+                inputs = self._tokenizer.apply_chat_template(
+                    messages,
+                    return_tensors="pt",
+                    add_generation_prompt=True
+                ).to(self._device)
+                
+                with torch.no_grad():
+                    outputs = self._model.generate(
+                        inputs,
+                        max_new_tokens=400,  # Strict limit for concise output
+                        do_sample=True,
+                        temperature=0.5,  # Lower temp for more focused output
+                        top_p=0.9,
+                        pad_token_id=self._tokenizer.eos_token_id,
+                    )
+                
+                response_tokens = outputs[0][inputs.shape[1]:]
+                response_text = self._tokenizer.decode(response_tokens, skip_special_tokens=True)
             
             # Parse response into structured format
             return self._parse_summary_response(response_text, data, start_time)

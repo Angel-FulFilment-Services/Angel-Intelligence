@@ -227,7 +227,7 @@ ALLOWED_TABLES = [
     'ai_monthly_summaries',
     'ai_chat_conversations',
     'ai_chat_messages',
-    'ai_client_configs',
+    'ai_configs',
     'ai_call_annotations',
 ]
 
