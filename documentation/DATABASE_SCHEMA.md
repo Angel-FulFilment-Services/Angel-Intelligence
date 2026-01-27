@@ -425,19 +425,22 @@ CREATE TABLE ai_voice_fingerprints (
 
 ### ai_configs
 
-Three-tier configuration system for call analysis.
+Four-tier configuration system for call analysis.
 
-**Configuration Tiers:**
-- `universal` - Standard analysis framework (topics, actions, rubric)
-- `client` - Client-specific context (organisation info, tone guidelines)
-- `campaign_type` - Reusable campaign templates (goals, success criteria)
+**Configuration Tiers (load order for analysis):**
+1. `global` - Default analysis framework (topics, actions, rubric, quality_signals) - Always loaded, file fallback
+2. `campaign` - Campaign-specific goals and requirements (matched by campaign_type)
+3. `direction` - Direction-specific requirements (matched by direction: inbound/outbound/sms_handraiser)
+4. `client` - Client-specific organisational context (matched by client_ref)
+
+**Override Priority:** client > direction > campaign > global
 
 ```sql
 CREATE TABLE ai_configs (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     
-    -- Configuration tier (three-tier system)
-    config_tier ENUM('universal', 'client', 'campaign_type') 
+    -- Configuration tier (four-tier system)
+    config_tier ENUM('global', 'universal', 'campaign', 'campaign_type', 'direction', 'client') 
         NOT NULL DEFAULT 'client',
     
     -- Client reference (for 'client' tier)
@@ -446,8 +449,11 @@ CREATE TABLE ai_configs (
     -- Campaign (legacy field)
     campaign VARCHAR(100) DEFAULT NULL,
     
-    -- Campaign type (for 'campaign_type' tier)
+    -- Campaign type (for 'campaign' tier)
     campaign_type VARCHAR(100) DEFAULT NULL,
+    
+    -- Direction (for 'direction' tier)
+    direction VARCHAR(50) DEFAULT NULL,
     
     -- Configuration
     config_type VARCHAR(100) NOT NULL,
@@ -461,12 +467,13 @@ CREATE TABLE ai_configs (
     updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
     -- Constraints
-    UNIQUE KEY unique_config_v2 (config_tier, client_ref, campaign_type, config_type),
+    UNIQUE KEY unique_config_v3 (config_tier, client_ref, campaign_type, direction, config_type),
     
     -- Indexes
     INDEX idx_config_tier (config_tier),
     INDEX idx_client (client_ref),
     INDEX idx_campaign_type (campaign_type),
+    INDEX idx_direction (direction),
     INDEX idx_active (is_active)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
@@ -474,10 +481,38 @@ CREATE TABLE ai_configs (
 **Example Records:**
 
 ```sql
--- Universal config (analysis framework)
+-- Global config (analysis framework) - fallback for all analysis
 INSERT INTO ai_configs 
 (config_tier, config_type, config_data, is_active)
 VALUES 
+('global', 'analysis', 
+ '{"topics": ["Donation", "Gift Aid"], "agent_actions": ["greeting", "verification"], "performance_rubric": ["Empathy", "Clarity"], "quality_signals": {...}}',
+ TRUE);
+
+-- Campaign config (matched by campaign_type in ai_call_recordings)
+INSERT INTO ai_configs 
+(config_tier, campaign_type, config_type, config_data, is_active)
+VALUES 
+('campaign', 'regular_giving', 'campaign_info',
+ '{"primary_intent": "Sign up to regular giving", "goals": ["Capture donation", "Gift Aid confirmation"], "success_criteria": ["Payment processed"]}',
+ TRUE);
+
+-- Direction config (matched by direction in ai_call_recordings)
+INSERT INTO ai_configs 
+(config_tier, direction, config_type, config_data, is_active)
+VALUES 
+('direction', 'outbound', 'direction_info',
+ '{"expectations": "Agent initiates call, should have clear purpose", "key_differences": ["Agent controls conversation flow", "Must verify supporter identity"]}',
+ TRUE);
+
+-- Client config (matched by client_ref in ai_call_recordings)
+INSERT INTO ai_configs 
+(config_tier, client_ref, config_type, config_data, is_active)
+VALUES 
+('client', 'CRUK001', 'client_info',
+ '{"organisation_name": "Cancer Research UK", "mission": "Beat cancer", "contact": {"email": "support@cruk.org"}}',
+ TRUE);
+``` 
 ('universal', 'analysis', 
  '{"topics": ["Donation", "Gift Aid"], "agent_actions": ["greeting", "verification"], "performance_rubric": ["Empathy", "Clarity"]}',
  TRUE);

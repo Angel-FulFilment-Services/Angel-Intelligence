@@ -33,7 +33,6 @@
     "Cancellation of regular giving",
     "Retention attempt / save conversation",
     "Call-back request / follow-up needed",
-    "PCI/Payment compliance discussion",
     "Safeguarding concern",
     "Vulnerable person indicators",
     "Legacy/bequest enquiry",
@@ -93,5 +92,181 @@
     "Engagement effectiveness",
     "Problem solving",
     "Effective closing"
-  ]
+  ],
+
+  "quality_signals": {
+    "_description": "Detailed quality assessment criteria with examples for AI evaluation",
+    
+    "universal_quality": [
+      {
+        "category": "Rapport",
+        "signal": "Warm opening",
+        "description": "Friendly greeting; natural tone; establishes human connection early."
+      },
+      {
+        "category": "Rapport",
+        "signal": "Active listening",
+        "description": "Acknowledges supporter statements; avoids interrupting; responds to cues."
+      },
+      {
+        "category": "Rapport",
+        "signal": "Personalisation",
+        "description": "Uses supporter name or contextual details when available."
+      },
+      {
+        "category": "Communication",
+        "signal": "Clarity",
+        "description": "Explains actions, next steps, and outcomes clearly."
+      },
+      {
+        "category": "Call Management",
+        "signal": "Structure",
+        "description": "Keeps conversation focused; smooth transitions; clear close summary."
+      },
+      {
+        "category": "Professionalism",
+        "signal": "Polite tone",
+        "description": "Consistently respectful, calm and friendly language."
+      },
+      {
+        "category": "Safeguarding",
+        "signal": "Vulnerability awareness",
+        "description": "Identifies and responds appropriately to high-risk vulnerability or capacity issues."
+      },
+      {
+        "category": "Behavioural Standards",
+        "signal": "No howlers",
+        "description": "No profanity, insults, arguments, sarcasm, or hostile behaviour."
+      }
+    ],
+
+    "gift_aid": {
+      "trigger_terms": "gift aid; reclaim tax; HMRC; 25p; 25%; declaration",
+      "minimum_components": "Eligibility (UK tax paid); explicit supporter consent; basic explanation of charity reclaim benefit.",
+      "soft_fail_examples": "Impact explanation missing but eligibility and consent present.",
+      "hard_fail_examples": "No consent; no eligibility check; incorrect explanation of reclaim process.",
+      "ai_handling": "Only evaluate when Gift Aid mentioned. Otherwise mark as N/A."
+    },
+
+    "vulnerability_capacity": [
+      {
+        "tier": "Tier 1 – Normal affordability objection",
+        "definition": "General cost hesitation without impaired decision-making.",
+        "examples": "Money is tight; can't afford much; maybe later.",
+        "ai_action": "Treat as standard objection; selling allowed using affordability techniques."
+      },
+      {
+        "tier": "Tier 2 – Situational sensitivity",
+        "definition": "Emotional or situational stress that requires softer approach.",
+        "examples": "Bereavement; illness mention; job loss.",
+        "ai_action": "Increase empathy expectation; adjust approach but fundraising still allowed if appropriate."
+      },
+      {
+        "tier": "Tier 3 – High confidence vulnerability or lack of capacity",
+        "definition": "Clear cognitive impairment, intoxication, inability to understand transaction, or reliance on third party for finances.",
+        "examples": "Brain injury; dementia; intoxicated; carer manages finances.",
+        "ai_action": "Safeguarding trigger; stop fundraising activity; escalate."
+      }
+    ],
+
+    "howlers": [
+      {
+        "type": "Profanity",
+        "examples": "Swearing directed at supporter",
+        "action": "Immediate flag; exclude from client samples."
+      },
+      {
+        "type": "Rudeness/insults",
+        "examples": "Mocking; belittling language",
+        "action": "Immediate flag; coaching/escalation."
+      },
+      {
+        "type": "Arguments",
+        "examples": "Hostile back-and-forth; raised voice",
+        "action": "Immediate flag; exclude from samples."
+      },
+      {
+        "type": "Data breach",
+        "examples": "Sharing sensitive data incorrectly",
+        "action": "Critical escalation."
+      }
+    ],
+
+    "objection_handling": [
+      {
+        "step": "Identify",
+        "definition": "Recognise and label the objection using active listening."
+      },
+      {
+        "step": "Respond",
+        "definition": "Acknowledge concern and maintain engagement before pitching solution."
+      },
+      {
+        "step": "Overcome",
+        "definition": "Apply correct rebuttal or reassurance strategy."
+      },
+      {
+        "step": "Question",
+        "definition": "Move confidently to next action or close."
+      }
+    ],
+
+    "objection_library": [
+      {
+        "objection": "Cannot afford",
+        "goal": "Reframe regularity; offer smaller amount; maintain dignity."
+      },
+      {
+        "objection": "Already support other charities",
+        "goal": "Position alongside existing giving."
+      },
+      {
+        "objection": "Don't want to give bank/card details",
+        "goal": "Explain security; Direct Debit Guarantee; recording pause."
+      },
+      {
+        "objection": "Will donate online later",
+        "goal": "Highlight convenience now; reduce friction."
+      },
+      {
+        "objection": "Prefer one-off donation",
+        "goal": "Explain value of regular support; offer low monthly alternative."
+      }
+    ],
+
+    "rapport_cues": [
+      {
+        "cue": "Mentions children/grandchildren",
+        "expected_response": "Acknowledge; brief personal connection."
+      },
+      {
+        "cue": "Mentions pets/animals",
+        "expected_response": "Acknowledge and link naturally if cause-relevant."
+      },
+      {
+        "cue": "Mentions military/service background",
+        "expected_response": "Thank them; respectful acknowledgement."
+      },
+      {
+        "cue": "Mentions location/weather",
+        "expected_response": "Light acknowledgement; friendly tone."
+      },
+      {
+        "cue": "Mentions being busy",
+        "expected_response": "Acknowledge time constraint; tighten call structure."
+      },
+      {
+        "cue": "Mentions previous support or volunteering",
+        "expected_response": "Thank them; explore involvement briefly."
+      },
+      {
+        "cue": "Mentions retirement/age",
+        "expected_response": "Respectful acknowledgement; adjust tone appropriately."
+      },
+      {
+        "cue": "Mentions personal interest aligned to charity cause",
+        "expected_response": "Explore connection briefly; link to impact."
+      }
+    ]
+  }
 }

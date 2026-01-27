@@ -1820,6 +1820,7 @@ class UniversalConfigResponse(BaseModel):
     topics: List[str]
     agent_actions: List[str]
     performance_rubric: List[str]
+    quality_signals: dict = {}
     source: str = "database"
 
 
@@ -1859,12 +1860,27 @@ class CampaignTypeResponse(BaseModel):
     effective_performance_rubric: List[str] = []
 
 
+class DirectionRequest(BaseModel):
+    """Request to save direction config."""
+    direction: str  # inbound, outbound, sms_handraiser
+    config_data: dict  # Dynamic structure
+
+
+class DirectionResponse(BaseModel):
+    """Response with direction config."""
+    direction: str
+    config_data: dict = {}
+    prompt_context: str = ""  # How it appears in prompts
+
+
 class MergedConfigResponse(BaseModel):
-    """Response with merged three-tier config."""
-    universal: UniversalConfigResponse
+    """Response with merged four-tier config."""
+    universal: UniversalConfigResponse  # Also called 'global' in new terminology
     client: Optional[ClientContextResponse] = None
     campaign_type: Optional[CampaignTypeResponse] = None
+    direction: Optional[DirectionResponse] = None
     prompt_context: str  # Combined context for LLM prompts
+    quality_signals: dict = {}  # Quality assessment framework from global config
     # Effective arrays (with overrides applied)
     effective_topics: List[str] = []
     effective_agent_actions: List[str] = []
@@ -2040,13 +2056,104 @@ async def delete_campaign_type_config(campaign_type: str):
     result = db.execute("""
         UPDATE ai_configs
         SET is_active = FALSE, updated_at = NOW()
-        WHERE config_tier = 'campaign_type' AND campaign_type = %s
+        WHERE config_tier IN ('campaign', 'campaign_type') AND campaign_type = %s
     """, (campaign_type,))
     
     if result == 0:
         raise HTTPException(status_code=404, detail=f"No configuration found for campaign type '{campaign_type}'")
     
     return {"message": f"Configuration for campaign type '{campaign_type}' deactivated"}
+
+
+# =============================================================================
+# Direction Configuration Endpoints (NEW - Four Tier System)
+# =============================================================================
+
+
+@router.get(
+    "/api/v2/config/directions",
+    response_model=List[str],
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def list_directions_with_config():
+    """List all directions that have configuration."""
+    from src.services.config import get_config_service
+    config_service = get_config_service()
+    return config_service.list_directions()
+
+@router.get(
+    "/api/v2/config/direction/{direction}",
+    response_model=DirectionResponse,
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def get_direction_config(direction: str):
+    """Get configuration for a specific direction."""
+    from src.services.config import get_config_service
+    config_service = get_config_service()
+    config = config_service.get_direction_config(direction)
+    
+    if not config:
+        raise HTTPException(status_code=404, detail=f"No configuration found for direction '{direction}'")
+    
+    return DirectionResponse(
+        direction=config.direction,
+        config_data=config.config_data,
+        prompt_context=config.to_prompt_context()
+    )
+
+
+@router.post(
+    "/api/v2/config/direction/{direction}",
+    response_model=DirectionResponse,
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def save_direction_config(direction: str, request: DirectionRequest):
+    """Save or update direction configuration."""
+    from src.services.config import get_config_service
+    config_service = get_config_service()
+    
+    # Validate direction value
+    valid_directions = ["inbound", "outbound", "sms_handraiser"]
+    if direction not in valid_directions:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Invalid direction '{direction}'. Must be one of: {', '.join(valid_directions)}"
+        )
+    
+    config_service.save_direction_config(direction, request.config_data)
+    
+    # Fetch the saved config
+    config = config_service.get_direction_config(direction, use_cache=False)
+    
+    return DirectionResponse(
+        direction=config.direction,
+        config_data=config.config_data,
+        prompt_context=config.to_prompt_context()
+    )
+
+
+@router.delete(
+    "/api/v2/config/direction/{direction}",
+    dependencies=[Depends(verify_token)],
+    tags=["Configuration v2"]
+)
+async def delete_direction_config(direction: str):
+    """Deactivate direction configuration."""
+    db = get_db_connection()
+    
+    result = db.execute("""
+        UPDATE ai_configs
+        SET is_active = FALSE, updated_at = NOW()
+        WHERE config_tier = 'direction' AND direction = %s
+    """, (direction,))
+    
+    if result == 0:
+        raise HTTPException(status_code=404, detail=f"No configuration found for direction '{direction}'")
+    
+    return {"message": f"Configuration for direction '{direction}' deactivated"}
 
 
 @router.get(
@@ -2057,44 +2164,59 @@ async def delete_campaign_type_config(campaign_type: str):
 )
 async def get_merged_config(
     client_ref: Optional[str] = Query(default=None),
-    campaign_type: Optional[str] = Query(default=None)
+    campaign_type: Optional[str] = Query(default=None),
+    direction: Optional[str] = Query(default=None)
 ):
     """
-    Get merged three-tier configuration for a specific context.
+    Get merged four-tier configuration for a specific context.
     
-    Combines:
-    1. Universal config (always included)
-    2. Client config (if client_ref provided)
-    3. Campaign type config (if campaign_type provided)
+    Combines all applicable tiers:
+    1. Global config (always included, fallback to file)
+    2. Campaign config (if campaign_type provided)
+    3. Direction config (if direction provided)
+    4. Client config (if client_ref provided)
     
     Returns the combined prompt_context that would be used in LLM prompts.
+    Override priority: client > direction > campaign > global
     """
     from src.services.config import get_config_service
     
     config_service = get_config_service()
-    merged = config_service.get_merged_config(client_ref, campaign_type)
+    merged = config_service.get_merged_config(
+        campaign_type=campaign_type,
+        direction=direction,
+        client_ref=client_ref
+    )
     
-    universal = merged["universal"]
-    client = merged.get("client")
-    campaign = merged.get("campaign_type")
+    global_cfg = merged["global_config"]
+    campaign_cfg = merged.get("campaign_config")
+    direction_cfg = merged.get("direction_config")
+    client_cfg = merged.get("client_config")
     
     return MergedConfigResponse(
         universal=UniversalConfigResponse(
-            topics=universal.topics,
-            agent_actions=universal.agent_actions,
-            performance_rubric=universal.performance_rubric,
-            source="database" if universal.topics else "file"
+            topics=global_cfg.topics,
+            agent_actions=global_cfg.agent_actions,
+            performance_rubric=global_cfg.performance_rubric,
+            quality_signals=global_cfg.quality_signals,
+            source="database" if global_cfg.topics else "file"
         ),
-        client=ClientContextResponse(
-            client_ref=client.client_ref,
-            config_data=client.config_data,
-            prompt_context=client.to_prompt_context()
-        ) if client else None,
+        quality_signals=global_cfg.quality_signals,
         campaign_type=CampaignTypeResponse(
-            campaign_type=campaign.campaign_type,
-            config_data=campaign.config_data,
-            prompt_context=campaign.to_prompt_context()
-        ) if campaign else None,
+            campaign_type=campaign_cfg.campaign_type,
+            config_data=campaign_cfg.config_data,
+            prompt_context=campaign_cfg.to_prompt_context()
+        ) if campaign_cfg else None,
+        direction=DirectionResponse(
+            direction=direction_cfg.direction,
+            config_data=direction_cfg.config_data,
+            prompt_context=direction_cfg.to_prompt_context()
+        ) if direction_cfg else None,
+        client=ClientContextResponse(
+            client_ref=client_cfg.client_ref,
+            config_data=client_cfg.config_data,
+            prompt_context=client_cfg.to_prompt_context()
+        ) if client_cfg else None,
         prompt_context=merged.get("prompt_context", ""),
         # Effective arrays (with overrides applied)
         effective_topics=merged.get("topics", []),

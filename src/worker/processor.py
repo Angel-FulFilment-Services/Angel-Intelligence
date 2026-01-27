@@ -182,6 +182,7 @@ class CallProcessor:
                 recording.id,
                 client_ref=recording.client_ref,
                 campaign_type=recording.campaign_type,
+                direction=recording.direction,
                 client_config=client_config
             )
             
@@ -492,6 +493,7 @@ class CallProcessor:
         recording_id: int,
         client_ref: Optional[str] = None,
         campaign_type: Optional[str] = None,
+        direction: Optional[str] = None,
         client_config: Optional[Dict[str, Any]] = None
     ) -> Optional[dict]:
         """Analyse the call recording with optional client-specific config."""
@@ -499,7 +501,7 @@ class CallProcessor:
             logger.info("Analysis service not available - skipping")
             return None
         
-        logger.info(f"Analysing recording {recording_id} (client={client_ref}, campaign={campaign_type})")
+        logger.info(f"Analysing recording {recording_id} (client={client_ref}, campaign={campaign_type}, direction={direction})")
         
         # Pass client config to analyser if available
         if client_config:
@@ -515,7 +517,8 @@ class CallProcessor:
             transcript=transcript,
             recording_id=recording_id,
             client_ref=client_ref,
-            campaign_type=campaign_type
+            campaign_type=campaign_type,
+            direction=direction
         )
     
     def _save_analysis(self, recording: CallRecording, analysis: dict) -> int:

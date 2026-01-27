@@ -147,7 +147,7 @@ class AnalysisService:
             with open(config_path, "r", encoding="utf-8") as f:
                 return json.load(f)
         return {"topics": [], "agent_actions": [], "performance_rubric": []}
-    
+
     def _ensure_analysis_model_loaded(self) -> None:
         """Ensure the analysis model is loaded."""
         if self.use_mock:
@@ -332,7 +332,8 @@ class AnalysisService:
         transcript: Dict[str, Any],
         recording_id: int,
         client_ref: Optional[str] = None,
-        campaign_type: Optional[str] = None
+        campaign_type: Optional[str] = None,
+        direction: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Analyse a call recording.
@@ -343,6 +344,7 @@ class AnalysisService:
             recording_id: Database recording ID
             client_ref: Client reference for client-specific config (optional)
             campaign_type: Campaign type for campaign-specific config (optional)
+            direction: Call direction for direction-specific config (optional)
             
         Returns:
             Analysis results dictionary
@@ -357,9 +359,9 @@ class AnalysisService:
             return self._mock_analysis(speaker_metrics, start_time)
         
         if self.analysis_mode == "audio" and audio_path:
-            return self._analyse_audio(audio_path, transcript, speaker_metrics, start_time, client_ref, campaign_type)
+            return self._analyse_audio(audio_path, transcript, speaker_metrics, start_time, client_ref, campaign_type, direction)
         else:
-            return self._analyse_transcript(transcript, speaker_metrics, start_time, client_ref, campaign_type)
+            return self._analyse_transcript(transcript, speaker_metrics, start_time, client_ref, campaign_type, direction)
     
     def _calculate_speaker_metrics(self, transcript: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate metrics for each speaker matching specification format."""
@@ -471,14 +473,26 @@ class AnalysisService:
         speaker_metrics: Dict[str, Any],
         start_time: float,
         client_ref: Optional[str] = None,
-        campaign_type: Optional[str] = None
+        campaign_type: Optional[str] = None,
+        direction: Optional[str] = None
     ) -> Dict[str, Any]:
-        """Analyse call using audio directly."""
+        """Analyse call using audio directly with transcript context."""
         try:
             self._ensure_analysis_model_loaded()
             
-            # Get full transcript text for context
-            full_text = transcript.get("full_transcript", "")
+            # Format transcript with timestamps and segment IDs (same as transcript analysis)
+            formatted_transcript, segment_map = self._format_transcript_with_timestamps(transcript)
+            
+            # Calculate max timestamp from segments
+            segments = transcript.get("segments", [])
+            max_timestamp = max((seg.get("end", 0) for seg in segments), default=0)
+            
+            # Get merged config for this context (all four tiers) - same as transcript analysis
+            merged_config = self._config_service.get_merged_config(
+                campaign_type=campaign_type,
+                direction=direction,
+                client_ref=client_ref
+            )
             
             # Preprocess audio
             processed_audio = self._preprocess_audio(audio_path)
@@ -486,18 +500,44 @@ class AnalysisService:
             # Chunk audio for processing
             chunks = self._chunk_audio(processed_audio, max_duration=30)
             
-            # Sample chunks for efficiency
+            # Sample chunks for efficiency (beginning, middle, end)
             if len(chunks) > 3:
                 sample_chunks = [chunks[0], chunks[len(chunks)//2], chunks[-1]]
             else:
                 sample_chunks = chunks
             
-            # Analyse each chunk
+            # Get transcript segments for each chunk
+            def get_segments_for_chunk(chunk_start: float, chunk_end: float) -> str:
+                """Get formatted transcript lines that fall within the chunk time range."""
+                chunk_lines = []
+                for seg in segments:
+                    seg_start = seg.get("start", 0)
+                    seg_end = seg.get("end", 0)
+                    # Include segment if it overlaps with chunk
+                    if seg_start < chunk_end and seg_end > chunk_start:
+                        segment_id = seg.get("segment_id") or f"seg_{segments.index(seg)+1:03d}"
+                        speaker = seg.get("speaker", "Unknown")
+                        if speaker in ["SPEAKER_00", "agent"] or speaker.startswith("agent"):
+                            speaker_label = "Agent"
+                        elif speaker in ["SPEAKER_01", "supporter"] or speaker.startswith("supporter"):
+                            speaker_label = "Supporter"
+                        else:
+                            speaker_label = speaker.title()
+                        text = seg.get("text", "").strip()
+                        if text:
+                            chunk_lines.append(f"[{segment_id}] [{seg_start:.1f}s - {seg_end:.1f}s] {speaker_label}: {text}")
+                return "\n".join(chunk_lines)
+            
+            # Analyse each chunk with transcript context
             chunk_analyses = []
             for chunk_start, chunk_end, chunk_path in sample_chunks:
+                chunk_transcript = get_segments_for_chunk(chunk_start, chunk_end)
                 analysis = self._analyse_audio_chunk(
                     chunk_path,
-                    context=f"Segment from {chunk_start:.0f}s to {chunk_end:.0f}s"
+                    chunk_start=chunk_start,
+                    chunk_end=chunk_end,
+                    chunk_transcript=chunk_transcript,
+                    merged_config=merged_config
                 )
                 chunk_analyses.append(analysis)
                 
@@ -509,8 +549,8 @@ class AnalysisService:
             if processed_audio != audio_path and os.path.exists(processed_audio):
                 os.unlink(processed_audio)
             
-            # Aggregate results
-            result = self._aggregate_analyses(chunk_analyses, speaker_metrics)
+            # Aggregate results into same structure as transcript analysis
+            result = self._aggregate_audio_analyses(chunk_analyses, speaker_metrics, segment_map, max_timestamp)
             result["processing_time"] = time.time() - start_time
             
             return result
@@ -542,7 +582,8 @@ class AnalysisService:
         speaker_metrics: Dict[str, Any],
         start_time: float,
         client_ref: Optional[str] = None,
-        campaign_type: Optional[str] = None
+        campaign_type: Optional[str] = None,
+        direction: Optional[str] = None
     ) -> Dict[str, Any]:
         """Analyse call using transcript text only (with text-only model or API)."""
         try:
@@ -557,8 +598,12 @@ class AnalysisService:
             segments = transcript.get("segments", [])
             max_timestamp = max((seg.get("end", 0) for seg in segments), default=0)
             
-            # Get merged config for this context
-            merged_config = self._config_service.get_merged_config(client_ref, campaign_type)
+            # Get merged config for this context (all four tiers)
+            merged_config = self._config_service.get_merged_config(
+                campaign_type=campaign_type,
+                direction=direction,
+                client_ref=client_ref
+            )
             
             # Build prompt with context and merged config (includes overrides)
             prompt = self._build_transcript_analysis_prompt(
@@ -850,71 +895,119 @@ class AnalysisService:
             logger.warning(f"Audio chunking failed: {e}")
             return [(0, 0, audio_path)]
     
-    def _analyse_audio_chunk(self, audio_path: str, context: str = "") -> Dict[str, Any]:
-        """Analyse a single audio chunk."""
-        topics = self._config.get("topics", [])
-        actions = self._config.get("agent_actions", [])
-        rubric = self._config.get("performance_rubric", [])
+    def _analyse_audio_chunk(
+        self, 
+        audio_path: str, 
+        chunk_start: float = 0,
+        chunk_end: float = 0,
+        chunk_transcript: str = "",
+        merged_config: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
+        """
+        Analyse a single audio chunk with transcript context.
+        
+        Uses the same output schema as transcript analysis for consistency.
+        """
+        # Use merged config if provided (includes overrides from client/campaign_type)
+        if merged_config:
+            topics = merged_config.get("topics", [])
+            actions = merged_config.get("agent_actions", [])
+            rubric = merged_config.get("performance_rubric", [])
+            prompt_context = merged_config.get("prompt_context", "")
+        else:
+            # Fallback to global config
+            global_cfg = self._config_service.get_global_config()
+            topics = global_cfg.topics or self._config.get("topics", [])
+            actions = global_cfg.agent_actions or self._config.get("agent_actions", [])
+            rubric = global_cfg.performance_rubric or self._config.get("performance_rubric", [])
+            prompt_context = ""
         
         # Build lists from config
         topic_list = ", ".join(topics) if topics else "donation, gift aid, regular giving, complaints, account updates"
         action_list = ", ".join(actions) if actions else "greeting, verification, explanation, objection handling, closing"
-        rubric_list = ", ".join([r.get("name", r) if isinstance(r, dict) else r for r in rubric]) if rubric else "Empathy, Clarity, Listening, Rapport building"
+        
+        # Convert rubric items to valid JSON keys
+        def to_key(name: str) -> str:
+            if isinstance(name, dict):
+                name = name.get("name", "")
+            return name.replace(" ", "_").replace("&", "and").replace("/", "_")
+        
+        perf_keys = [to_key(r) for r in rubric] if rubric else [
+            "Empathy", "Clarity", "Listening", "Script_adherence",
+            "Product_knowledge", "Rapport_building", "Objection_handling", "Closing_effectiveness"
+        ]
+        perf_keys_list = ", ".join(perf_keys)
+        perf_scores_json = ",\n        ".join([f'"{k}": 1-10' for k in perf_keys])
+        
+        # Build context section (includes quality signals from merged config)
+        context_section = f"\n{prompt_context}\n" if prompt_context else ""
+        
+        # Build transcript section for this chunk
+        transcript_section = ""
+        if chunk_transcript:
+            transcript_section = f"""
+TRANSCRIPT FOR THIS SEGMENT (use segment_ids for references):
+{chunk_transcript}
+"""
         
         system_prompt = f"""You are an expert call quality analyst for charity supporter engagement calls.
-{BRITISH_ENGLISH_INSTRUCTION}
-
-Analyse this audio recording segment for:
-1. TONE: Agent's voice (warm/neutral/cold/hostile)
-2. EMOTION: Detected emotions (calm/frustrated/happy/anxious)
-3. PACING: Speech speed (rushed/steady/slow)
-4. PROFESSIONALISM: Overall professional conduct
-5. SUPPORTER EXPERIENCE: How the supporter seems to feel
-6. TOPICS: What subjects are being discussed
-7. ACTIONS: What the agent is doing
-8. SCORE IMPACTS: Moments that positively or negatively affect call quality"""
-
-        user_prompt = f"""Analyse this call recording audio.
-
-{context}
-
+Analyse this audio recording segment alongside its transcript.
+{context_section}
+AUDIO SEGMENT: {chunk_start:.1f}s to {chunk_end:.1f}s
+{transcript_section}
 TOPICS TO IDENTIFY: {topic_list}
 AGENT ACTIONS TO DETECT: {action_list}
-PERFORMANCE CRITERIA: {rubric_list}
+PERFORMANCE CRITERIA: {perf_keys_list}
 
-Return ONLY valid JSON matching this structure:
+Return your analysis as valid JSON matching this exact structure:
+
 {{
-    "agent_tone": "warm/neutral/cold/hostile",
-    "agent_emotion": "calm/frustrated/happy/anxious/other",
-    "supporter_emotion": "calm/frustrated/happy/anxious/other",
-    "speech_clarity": 1-10,
-    "professionalism": 1-10,
-    "detected_topics": ["topics heard in this segment"],
-    "detected_actions": ["actions performed by agent"],
+    "summary": "1-2 sentence observation about this segment",
+    "sentiment_score": 0 to 10 (0=hostile, 5=neutral, 10=very friendly),
+    "key_topics": [
+        {{"name": "Topic Name", "confidence": 0.0-1.0}}
+    ],
+    "agent_actions": [
+        {{"action": "specific action", "segment_id": "seg_XXX"}}
+    ],
     "score_impacts": [
-        {{"impact": -5 to +5, "category": "Empathy/Clarity/Listening/Rapport_building", "reason": "why this affected the score"}}
+        {{"segment_id": "seg_XXX", "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote"}}
+    ],
+    "compliance_flags": [
+        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_id": "seg_XXX", "severity": "low/medium/high/critical", "issue": "description", "quote": "exact quote"}}
     ],
     "performance_scores": {{
-        "Empathy": 1-10,
-        "Clarity": 1-10,
-        "Listening": 1-10,
-        "Rapport_building": 1-10
+        {perf_scores_json}
     }},
-    "detected_issues": ["any compliance or quality issues"],
-    "positive_indicators": ["things the agent did well"],
-    "sentiment_score": 0 to 10,
-    "brief_observation": "One sentence observation about this segment"
+    "audio_observations": {{
+        "agent_tone": "warm/neutral/cold/hostile",
+        "agent_emotion": "calm/frustrated/happy/anxious/other",
+        "supporter_emotion": "calm/frustrated/happy/anxious/other",
+        "speech_clarity": 1-10,
+        "background_noise": "low/medium/high",
+        "pacing": "rushed/steady/slow"
+    }}
 }}
 
+AUDIO ANALYSIS GUIDANCE:
+- Listen for TONE OF VOICE - warmth, empathy, frustration, impatience
+- Listen for PACING - rushing through information, giving supporter time to respond
+- Listen for INTERRUPTIONS - agent cutting off supporter
+- Listen for BACKGROUND NOISE affecting call quality
+- Use segment_ids from the transcript to reference specific moments
+- Include quotes from the transcript as evidence
+
 SCORE IMPACT SCALE:
-- +5: Exceptional moment
+- +5: Exceptional moment (exemplary)
 - +3 to +4: Strong positive
 - +1 to +2: Minor positive
 - -1 to -2: Minor negative
 - -3 to -4: Significant negative
 - -5: Severe issue
 
-Return ONLY the JSON object, no other text."""
+COMPLIANCE FLAGS: Only include if actual issues detected. Use empty array [] if none.
+
+Return ONLY valid JSON - no text before or after."""
 
         try:
             # Build conversation with audio
@@ -923,12 +1016,12 @@ Return ONLY the JSON object, no other text."""
                     "role": "user",
                     "content": [
                         {"type": "audio", "audio": audio_path},
-                        {"type": "text", "text": system_prompt + "\n\n" + user_prompt}
+                        {"type": "text", "text": system_prompt}
                     ]
                 }
             ]
             
-            # Process with Qwen
+            # Process with Qwen audio model
             text = self._analysis_processor.apply_chat_template(
                 conversation,
                 add_generation_prompt=True,
@@ -953,7 +1046,7 @@ Return ONLY the JSON object, no other text."""
             with torch.no_grad():
                 text_ids = self._analysis_model.generate(
                     **inputs,
-                    max_new_tokens=600,
+                    max_new_tokens=1500,  # Increased for fuller response
                     do_sample=False,
                     return_audio=False
                 )
@@ -965,11 +1058,11 @@ Return ONLY the JSON object, no other text."""
                 clean_up_tokenization_spaces=False
             )[0]
             
-            return self._parse_chunk_response(response)
+            return self._parse_audio_chunk_response(response, chunk_start, chunk_end)
             
         except Exception as e:
             logger.error(f"Chunk analysis failed: {e}")
-            return self._default_chunk_analysis()
+            return self._default_audio_chunk_analysis(chunk_start, chunk_end)
     
     def _build_transcript_analysis_prompt(self, transcript: str, max_timestamp: float = 0, prompt_context: str = "", merged_config: Optional[Dict[str, Any]] = None) -> str:
         """Build prompt for transcript-based analysis."""
@@ -979,11 +1072,11 @@ Return ONLY the JSON object, no other text."""
             actions = merged_config.get("agent_actions", [])
             rubric = merged_config.get("performance_rubric", [])
         else:
-            # Fallback to universal config directly
-            universal = self._config_service.get_universal_config()
-            topics = universal.topics or self._config.get("topics", [])
-            actions = universal.agent_actions or self._config.get("agent_actions", [])
-            rubric = universal.performance_rubric or self._config.get("performance_rubric", [])
+            # Fallback to global config directly
+            global_cfg = self._config_service.get_global_config()
+            topics = global_cfg.topics or self._config.get("topics", [])
+            actions = global_cfg.agent_actions or self._config.get("agent_actions", [])
+            rubric = global_cfg.performance_rubric or self._config.get("performance_rubric", [])
         
         # Build topic and action lists for the prompt - use full lists from config
         topic_list = ", ".join(topics) if topics else "donation, gift aid, regular giving, complaints, updates, account changes, direct debit, legacy giving, event registration, volunteer enquiry"
@@ -1007,10 +1100,10 @@ Return ONLY the JSON object, no other text."""
         # Optionally truncate transcript for smaller models
         if self.max_transcript_length > 0:
             transcript = transcript[:self.max_transcript_length]
-            # Use simplified prompt for constrained models
+            # Use simplified prompt for constrained models (no quality_context to save tokens)
             return self._build_simple_analysis_prompt(transcript, topic_list, perf_keys, perf_keys_list, max_timestamp, prompt_context)
         
-        # Build context section
+        # Build context section (prompt_context already includes all four tiers' context including quality signals)
         context_section = f"\n\n{prompt_context}\n" if prompt_context else ""
         
         return f"""You are an expert call quality analyst for charity supporter engagement calls.
@@ -1739,7 +1832,7 @@ CRITICAL RULES:
             return max(0, sentiment * 20)
     
     def _default_chunk_analysis(self) -> Dict[str, Any]:
-        """Default chunk analysis when processing fails."""
+        """Default chunk analysis when processing fails (legacy format)."""
         return {
             "agent_tone": "neutral",
             "agent_emotion": "calm",
@@ -1755,6 +1848,200 @@ CRITICAL RULES:
             "sentiment_score": 5,
             "brief_observation": "Analysis unavailable for this segment",
         }
+    
+    def _default_audio_chunk_analysis(self, chunk_start: float = 0, chunk_end: float = 0) -> Dict[str, Any]:
+        """Default audio chunk analysis matching the new aligned format."""
+        return {
+            "summary": f"Analysis unavailable for segment {chunk_start:.1f}s - {chunk_end:.1f}s",
+            "sentiment_score": 5,
+            "key_topics": [],
+            "agent_actions": [],
+            "score_impacts": [],
+            "compliance_flags": [],
+            "performance_scores": {},
+            "audio_observations": {
+                "agent_tone": "neutral",
+                "agent_emotion": "calm",
+                "supporter_emotion": "calm",
+                "speech_clarity": 7,
+                "background_noise": "low",
+                "pacing": "steady"
+            },
+            "chunk_start": chunk_start,
+            "chunk_end": chunk_end,
+        }
+    
+    def _parse_audio_chunk_response(self, response: str, chunk_start: float, chunk_end: float) -> Dict[str, Any]:
+        """Parse JSON from audio chunk analysis response (new aligned format)."""
+        try:
+            start = response.find('{')
+            end = response.rfind('}')
+            if start != -1 and end != -1:
+                json_str = response[start:end+1]
+                # Use json_repair if available
+                if JSON_REPAIR_AVAILABLE:
+                    try:
+                        json_str = repair_json(json_str)
+                    except Exception:
+                        pass
+                parsed = json.loads(json_str)
+                parsed["chunk_start"] = chunk_start
+                parsed["chunk_end"] = chunk_end
+                return parsed
+        except json.JSONDecodeError as e:
+            logger.warning(f"Audio chunk JSON parsing failed: {e}")
+        
+        return self._default_audio_chunk_analysis(chunk_start, chunk_end)
+    
+    def _aggregate_audio_analyses(
+        self, 
+        chunk_analyses: List[Dict[str, Any]],
+        speaker_metrics: Dict[str, Any],
+        segment_map: Dict[str, Dict],
+        max_timestamp: float
+    ) -> Dict[str, Any]:
+        """
+        Aggregate audio chunk analyses into final result.
+        
+        Produces the same output structure as transcript analysis.
+        """
+        if not chunk_analyses:
+            return self._empty_analysis(speaker_metrics, 0)
+        
+        # Collect all items from chunks
+        all_summaries = []
+        all_topics = []
+        all_actions = []
+        all_score_impacts = []
+        all_compliance_flags = []
+        all_performance_scores = {}
+        sentiment_scores = []
+        
+        # Audio-specific observations
+        tones = []
+        agent_emotions = []
+        supporter_emotions = []
+        clarity_scores = []
+        
+        for chunk in chunk_analyses:
+            # Summary
+            if chunk.get("summary"):
+                all_summaries.append(chunk["summary"])
+            
+            # Topics (with confidence)
+            for topic in chunk.get("key_topics", []):
+                if isinstance(topic, dict):
+                    all_topics.append(topic)
+                else:
+                    all_topics.append({"name": topic, "confidence": 0.8})
+            
+            # Agent actions (with segment_id)
+            for action in chunk.get("agent_actions", []):
+                if isinstance(action, dict):
+                    all_actions.append(action)
+                else:
+                    all_actions.append({"action": action, "segment_id": None})
+            
+            # Score impacts
+            all_score_impacts.extend(chunk.get("score_impacts", []))
+            
+            # Compliance flags
+            all_compliance_flags.extend(chunk.get("compliance_flags", []))
+            
+            # Performance scores (average across chunks)
+            for key, value in chunk.get("performance_scores", {}).items():
+                if key not in all_performance_scores:
+                    all_performance_scores[key] = []
+                if isinstance(value, (int, float)):
+                    all_performance_scores[key].append(value)
+            
+            # Sentiment
+            if "sentiment_score" in chunk:
+                sentiment_scores.append(chunk["sentiment_score"])
+            
+            # Audio observations
+            audio_obs = chunk.get("audio_observations", {})
+            if audio_obs:
+                if audio_obs.get("agent_tone"):
+                    tones.append(audio_obs["agent_tone"])
+                if audio_obs.get("agent_emotion"):
+                    agent_emotions.append(audio_obs["agent_emotion"])
+                if audio_obs.get("supporter_emotion"):
+                    supporter_emotions.append(audio_obs["supporter_emotion"])
+                if audio_obs.get("speech_clarity"):
+                    clarity_scores.append(audio_obs["speech_clarity"])
+        
+        # Calculate averages
+        avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 5.0
+        avg_clarity = sum(clarity_scores) / len(clarity_scores) if clarity_scores else 7.0
+        
+        # Average performance scores
+        final_performance_scores = {
+            k: round(sum(v) / len(v)) for k, v in all_performance_scores.items() if v
+        }
+        
+        # Determine dominant audio qualities
+        dominant_tone = max(set(tones), key=tones.count) if tones else "neutral"
+        dominant_agent_emotion = max(set(agent_emotions), key=agent_emotions.count) if agent_emotions else "calm"
+        dominant_supporter_emotion = max(set(supporter_emotions), key=supporter_emotions.count) if supporter_emotions else "calm"
+        
+        # Calculate quality score from score_impacts
+        if all_score_impacts:
+            quality_score = self._calculate_quality_score(all_score_impacts)
+        else:
+            quality_score = self._sentiment_to_quality(avg_sentiment)
+        
+        # Build summary from chunk observations
+        summary = " ".join(all_summaries[:3]) if all_summaries else "Audio analysis completed."
+        if len(summary) > 500:
+            summary = summary[:497] + "..."
+        
+        # Deduplicate topics by name
+        seen_topics = set()
+        unique_topics = []
+        for topic in all_topics:
+            name = topic.get("name", "")
+            if name and name not in seen_topics:
+                seen_topics.add(name)
+                unique_topics.append(topic)
+        
+        # Deduplicate actions by action text
+        seen_actions = set()
+        unique_actions = []
+        for action in all_actions:
+            action_text = action.get("action", "")
+            if action_text and action_text not in seen_actions:
+                seen_actions.add(action_text)
+                unique_actions.append(action)
+        
+        # Enrich with timestamps from segment_map
+        result = {
+            "summary": summary,
+            "sentiment_score": round(avg_sentiment, 1),
+            "quality_score": round(quality_score, 1),
+            "key_topics": unique_topics[:10],
+            "agent_actions": unique_actions[:15],
+            "score_impacts": all_score_impacts[:15],
+            "performance_scores": final_performance_scores,
+            "action_items": [],  # Could be derived from compliance_flags
+            "compliance_flags": all_compliance_flags[:5],
+            "speaker_metrics": speaker_metrics,
+            "audio_observations": {
+                "call_quality": "good" if avg_clarity >= 7 else "fair" if avg_clarity >= 5 else "poor",
+                "background_noise": "low",
+                "agent_tone": dominant_tone,
+                "agent_emotion": dominant_agent_emotion,
+                "supporter_emotion": dominant_supporter_emotion,
+                "speech_clarity": round(avg_clarity, 1),
+            },
+            "model_used": self.analysis_model_path,
+            "analysis_type": "audio",
+        }
+        
+        # Enrich segment_ids with timestamps
+        result = self._enrich_segment_timestamps(result, segment_map)
+        
+        return result
     
     def _empty_analysis(
         self, 
