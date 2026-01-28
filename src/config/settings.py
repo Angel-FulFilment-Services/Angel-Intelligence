@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     # ==========================================================================
     angel_env: str = Field(default="development", description="Environment: 'production' or 'development'")
     worker_id: str = Field(default="local-dev", description="Unique worker identifier")
+    log_level: str = Field(default="INFO", description="Logging level: DEBUG, INFO, WARNING, ERROR")
     
     # ==========================================================================
     # API AUTHENTICATION

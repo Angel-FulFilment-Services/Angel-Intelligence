@@ -158,19 +158,21 @@ class Worker:
 
 def main():
     """Main entry point for the worker."""
-    # Configure logging
+    settings = get_settings()
+    
+    # Configure logging with log level from settings
+    log_level = getattr(logging, settings.log_level.upper(), logging.INFO)
     logging.basicConfig(
-        level=logging.INFO,
+        level=log_level,
         format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
     )
-    
-    settings = get_settings()
     
     logger.info("=" * 60)
     logger.info("Angel Intelligence Worker")
     logger.info("=" * 60)
     logger.info(f"Environment: {settings.angel_env}")
     logger.info(f"Worker ID: {settings.worker_id}")
+    logger.info(f"Log level: {settings.log_level}")
     logger.info(f"Analysis mode: {settings.analysis_mode}")
     logger.info(f"Mock mode: {settings.use_mock_models}")
     logger.info("=" * 60)

@@ -679,6 +679,13 @@ class AnalysisService:
                 merged_config=merged_config
             )
             
+            # Debug: Log full prompt for testing
+            logger.debug("=" * 80)
+            logger.debug("FULL LLM PROMPT (audio API mode):")
+            logger.debug("=" * 80)
+            logger.debug(prompt)
+            logger.debug("=" * 80)
+            
             # Read and encode audio as base64
             with open(audio_path, 'rb') as f:
                 audio_bytes = f.read()
@@ -906,6 +913,13 @@ Return ONLY valid JSON - no text before or after."""
             # Log transcript info for debugging
             segment_count = len(segments)
             logger.info(f"Transcript: {segment_count} segments, {len(segment_map)} mapped, max_ts={max_timestamp:.1f}s, {len(prompt)} chars prompt")
+            
+            # Debug: Log full prompt for testing
+            logger.debug("=" * 80)
+            logger.debug("FULL LLM PROMPT (transcript mode):")
+            logger.debug("=" * 80)
+            logger.debug(prompt)
+            logger.debug("=" * 80)
             
             # Generate analysis using text-only model or API
             response = self._generate_text_only_response(prompt)
