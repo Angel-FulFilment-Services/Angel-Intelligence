@@ -1,0 +1,282 @@
+# =============================================================================
+# Transcription Service Deployment (Shared WhisperX)
+# =============================================================================
+# Runs shared WhisperX instances on GPU for all workers to use.
+# Workers call this via HTTP instead of loading their own WhisperX model.
+# The Kubernetes Service automatically load-balances across all replicas.
+#
+# Benefits:
+# - WhisperX model (~10GB VRAM per replica) shared by all workers
+# - Workers become lightweight (no GPU needed for transcription)
+# - Better GPU utilization
+# - True parallel transcription with multiple replicas
+# - Automatic load balancing via Kubernetes Service
+#
+# Scaling:
+#   Each replica requires ~10-12GB VRAM (medium model + diarization).
+#   Adjust replicas based on available GPU memory and throughput needs:
+#
+#   | Replicas | VRAM Used | Parallel Streams | Est. Calls/Hour |
+#   |----------|-----------|------------------|-----------------|
+#   | 1        | ~10GB     | 1                | 100-120         |
+#   | 2        | ~20GB     | 2                | 200-240         |
+#   | 3        | ~30GB     | 3                | 280-340         |
+#   | 4        | ~40GB     | 4                | 350-420         |
+#
+#   Scale command: kubectl scale deployment angel-intelligence-transcription --replicas=N
+#
+# Usage:
+#   1. kubectl apply -f configmap.yaml
+#   2. kubectl apply -f secret.yaml
+#   3. kubectl apply -f transcription-deployment.yaml
+#   4. Wait for WhisperX model to load (~1-2 min per replica)
+#   5. Set transcription-service-url in configmap.yaml
+#   6. kubectl apply -f deployment.yaml
+#
+# Requires: NVIDIA GPU with ~12GB VRAM per replica (medium model + diarization)
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: transcription-config
+  namespace: default
+  labels:
+    app: angel-intelligence
+    component: transcription
+data:
+  # Whisper model size: tiny, base, small, medium, large-v3
+  # VRAM: tiny=1GB, base=1GB, small=2GB, medium=5GB, large-v3=10GB
+  whisper-model: "medium"
+  
+  # Segmentation: 'word' or 'sentence'
+  transcript-segmentation: "word"
+  
+  # Service port
+  service-port: "8001"
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: angel-intelligence-transcription
+  namespace: default
+  labels:
+    app: angel-intelligence
+    component: transcription
+spec:
+  # Number of parallel transcription instances
+  # Each replica needs ~10-12GB VRAM and handles ~100-120 calls/hour
+  # Scale based on GPU memory: Thor 128GB can run 3-4 replicas comfortably
+  # alongside vLLM (18GB) with room to spare
+  replicas: 1
+  selector:
+    matchLabels:
+      app: angel-intelligence
+      component: transcription
+  strategy:
+    # RollingUpdate allows scaling without downtime
+    # maxUnavailable=0 ensures no capacity loss during updates
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
+  template:
+    metadata:
+      labels:
+        app: angel-intelligence
+        component: transcription
+    spec:
+      # Use NVIDIA runtime for GPU access
+      runtimeClassName: nvidia
+      
+      # Spread replicas across nodes if multiple GPUs/nodes available
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+          - weight: 100
+            podAffinityTerm:
+              labelSelector:
+                matchLabels:
+                  app: angel-intelligence
+                  component: transcription
+              topologyKey: kubernetes.io/hostname
+      
+      hostAliases:
+        - ip: "192.168.5.13"
+          hostnames:
+            - "afs-db02.angelfs.co.uk"
+
+      containers:
+      - name: transcription
+        image: 192.168.9.50:30500/angel-intelligence:latest-arm64
+        imagePullPolicy: IfNotPresent
+        
+        # LD_PRELOAD fixes ARM64 OpenMP TLS issue
+        command: ["/bin/sh", "-c", "export LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1; uvicorn src.api:app --host 0.0.0.0 --port 8001"]
+        
+        ports:
+        - containerPort: 8001
+          protocol: TCP
+          name: http
+
+        env:
+        # Fix ARM64 OpenMP TLS issue
+        - name: LD_PRELOAD
+          value: "/usr/lib/aarch64-linux-gnu/libgomp.so.1"
+        # Use local models only - no HuggingFace downloads
+        - name: HF_HUB_OFFLINE
+          value: "1"
+        - name: TRANSFORMERS_OFFLINE
+          value: "1"
+        # Environment
+        - name: ANGEL_ENV
+          value: "production"
+        - name: WORKER_ID
+          valueFrom:
+            fieldRef:
+              fieldPath: metadata.name
+        # API mode - only serves HTTP endpoints
+        - name: WORKER_MODE
+          value: "api"
+        - name: USE_GPU
+          value: "true"
+          
+        # Whisper model settings
+        - name: WHISPER_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: transcription-config
+              key: whisper-model
+        - name: WHISPER_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: whisper-model-path
+        - name: TRANSCRIPT_SEGMENTATION
+          valueFrom:
+            configMapKeyRef:
+              name: transcription-config
+              key: transcript-segmentation
+              
+        # HuggingFace token for pyannote speaker diarization
+        - name: HUGGINGFACE_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: huggingface-token
+
+        resources:
+          limits:
+            nvidia.com/gpu: 1
+            memory: "12Gi"
+          requests:
+            memory: "8Gi"
+            cpu: "2"
+
+        volumeMounts:
+        - name: models
+          mountPath: /models
+          readOnly: true
+        - name: model-cache
+          mountPath: /root/.cache
+
+        livenessProbe:
+          httpGet:
+            path: /internal/health
+            port: 8001
+          initialDelaySeconds: 60
+          periodSeconds: 30
+          timeoutSeconds: 10
+          
+        readinessProbe:
+          httpGet:
+            path: /internal/health
+            port: 8001
+          initialDelaySeconds: 30
+          periodSeconds: 10
+
+      volumes:
+      - name: models
+        persistentVolumeClaim:
+          claimName: angel-intelligence-models
+      - name: model-cache
+        hostPath:
+          path: /mnt/model-cache
+          type: DirectoryOrCreate
+
+      # Schedule on GPU nodes only
+      nodeSelector:
+        nvidia.com/gpu: "true"
+
+      restartPolicy: Always
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: transcription-service
+  namespace: default
+  labels:
+    app: angel-intelligence
+    component: transcription
+spec:
+  # ClusterIP for internal access only
+  # Kubernetes automatically load-balances across all ready replicas
+  type: ClusterIP
+  # Session affinity disabled = round-robin load balancing (best for throughput)
+  # Use 'ClientIP' if you want same client to hit same replica
+  sessionAffinity: None
+  ports:
+  - port: 8001
+    targetPort: 8001
+    protocol: TCP
+    name: http
+  selector:
+    app: angel-intelligence
+    component: transcription
+
+---
+# =============================================================================
+# Horizontal Pod Autoscaler (Optional)
+# =============================================================================
+# Automatically scales transcription replicas based on CPU/memory usage.
+# Uncomment to enable auto-scaling.
+#
+# Note: GPU-based scaling requires DCGM exporter and custom metrics.
+# This HPA uses CPU as a proxy for load (good enough for most cases).
+#
+# apiVersion: autoscaling/v2
+# kind: HorizontalPodAutoscaler
+# metadata:
+#   name: transcription-hpa
+#   namespace: default
+#   labels:
+#     app: angel-intelligence
+#     component: transcription
+# spec:
+#   scaleTargetRef:
+#     apiVersion: apps/v1
+#     kind: Deployment
+#     name: angel-intelligence-transcription
+#   minReplicas: 1
+#   maxReplicas: 4  # Adjust based on available GPU memory
+#   metrics:
+#   - type: Resource
+#     resource:
+#       name: cpu
+#       target:
+#         type: Utilization
+#         averageUtilization: 70
+#   behavior:
+#     scaleDown:
+#       stabilizationWindowSeconds: 300  # Wait 5 min before scaling down
+#       policies:
+#       - type: Pods
+#         value: 1
+#         periodSeconds: 60
+#     scaleUp:
+#       stabilizationWindowSeconds: 30
+#       policies:
+#       - type: Pods
+#         value: 1
+#         periodSeconds: 30

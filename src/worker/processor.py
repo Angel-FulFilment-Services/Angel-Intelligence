@@ -183,7 +183,10 @@ class CallProcessor:
                 client_ref=recording.client_ref,
                 campaign_type=recording.campaign_type,
                 direction=recording.direction,
-                client_config=client_config
+                client_config=client_config,
+                enqref=recording.enqref,
+                orderref=recording.orderref,
+                ddi=recording.ddi
             )
             
             # Step 7: Save analysis
@@ -494,7 +497,10 @@ class CallProcessor:
         client_ref: Optional[str] = None,
         campaign_type: Optional[str] = None,
         direction: Optional[str] = None,
-        client_config: Optional[Dict[str, Any]] = None
+        client_config: Optional[Dict[str, Any]] = None,
+        enqref: Optional[str] = None,
+        orderref: Optional[str] = None,
+        ddi: Optional[str] = None
     ) -> Optional[dict]:
         """Analyse the call recording with optional client-specific config."""
         if not self.analyser.is_available():
@@ -518,7 +524,10 @@ class CallProcessor:
             recording_id=recording_id,
             client_ref=client_ref,
             campaign_type=campaign_type,
-            direction=direction
+            direction=direction,
+            enqref=enqref,
+            orderref=orderref,
+            ddi=ddi
         )
     
     def _save_analysis(self, recording: CallRecording, analysis: dict) -> int:

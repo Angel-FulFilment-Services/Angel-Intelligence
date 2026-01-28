@@ -1,0 +1,181 @@
+# Audio Analysis vLLM Deployment (Qwen2.5-Omni)
+# This runs a shared audio LLM server for call audio analysis
+#
+# Model: Qwen2.5-Omni-7B - multimodal model supporting audio input
+# VRAM: ~16GB (can run on 24GB GPU with text LLM on separate GPU)
+#
+# Usage:
+#   1. kubectl apply -f secret.yaml  (must have huggingface-token)
+#   2. kubectl apply -f audio-vllm-deployment.yaml
+#   3. Wait for model to load (~3-5 min)
+#   4. Set audio-analysis-api-url in configmap.yaml
+#   5. kubectl apply -f deployment.yaml
+#
+# Note: This is separate from the text vLLM (vllm-deployment.yaml) because:
+#   - Different model architecture (multimodal vs text-only)
+#   - Audio processing requires different memory patterns
+#   - Allows independent scaling
+
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: audio-vllm-config
+  namespace: default
+data:
+  # Model - Qwen2.5-Omni for audio analysis
+  MODEL_NAME: "Qwen/Qwen2.5-Omni-7B"
+  
+  # Maximum model length (context window)
+  MAX_MODEL_LEN: "8192"
+  
+  # GPU memory utilization (0.0-1.0)
+  GPU_MEMORY_UTILIZATION: "0.85"
+  
+  # Tensor parallel (set higher for multi-GPU)
+  TENSOR_PARALLEL_SIZE: "1"
+  
+  # Maximum concurrent sequences
+  MAX_NUM_SEQS: "8"  # Lower than text model - audio is memory intensive
+
+---
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: audio-vllm-model-cache
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 50Gi  # Qwen2.5-Omni-7B is ~15GB
+  storageClassName: local-path
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audio-vllm-server
+  namespace: default
+  labels:
+    app: audio-vllm-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audio-vllm-server
+  strategy:
+    type: Recreate  # Avoid multiple instances during update
+  template:
+    metadata:
+      labels:
+        app: audio-vllm-server
+    spec:
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          ports:
+            - containerPort: 8000
+              name: http
+          env:
+            - name: HF_HOME
+              value: "/models"
+            - name: HUGGING_FACE_HUB_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: angel-intelligence-secrets
+                  key: huggingface-token
+            - name: MODEL_NAME
+              valueFrom:
+                configMapKeyRef:
+                  name: audio-vllm-config
+                  key: MODEL_NAME
+            - name: MAX_MODEL_LEN
+              valueFrom:
+                configMapKeyRef:
+                  name: audio-vllm-config
+                  key: MAX_MODEL_LEN
+            - name: GPU_MEMORY_UTILIZATION
+              valueFrom:
+                configMapKeyRef:
+                  name: audio-vllm-config
+                  key: GPU_MEMORY_UTILIZATION
+            - name: TENSOR_PARALLEL_SIZE
+              valueFrom:
+                configMapKeyRef:
+                  name: audio-vllm-config
+                  key: TENSOR_PARALLEL_SIZE
+            - name: MAX_NUM_SEQS
+              valueFrom:
+                configMapKeyRef:
+                  name: audio-vllm-config
+                  key: MAX_NUM_SEQS
+          args:
+            - "--model"
+            - "$(MODEL_NAME)"
+            - "--max-model-len"
+            - "$(MAX_MODEL_LEN)"
+            - "--gpu-memory-utilization"
+            - "$(GPU_MEMORY_UTILIZATION)"
+            - "--tensor-parallel-size"
+            - "$(TENSOR_PARALLEL_SIZE)"
+            - "--max-num-seqs"
+            - "$(MAX_NUM_SEQS)"
+            - "--trust-remote-code"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+          volumeMounts:
+            - name: model-cache
+              mountPath: /models
+          resources:
+            requests:
+              memory: "20Gi"
+              cpu: "4"
+              nvidia.com/gpu: "1"
+            limits:
+              memory: "28Gi"
+              cpu: "8"
+              nvidia.com/gpu: "1"
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 180  # Audio model takes longer to load
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 30
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 300
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+      volumes:
+        - name: model-cache
+          persistentVolumeClaim:
+            claimName: audio-vllm-model-cache
+      nodeSelector:
+        nvidia.com/gpu.present: "true"
+      tolerations:
+        - key: nvidia.com/gpu
+          operator: Exists
+          effect: NoSchedule
+
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: audio-vllm-server
+  namespace: default
+spec:
+  selector:
+    app: audio-vllm-server
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP

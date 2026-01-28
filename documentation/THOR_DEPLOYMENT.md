@@ -145,32 +145,52 @@ Each worker independently loads/unloads models:
 - No shared state
 - Models unloaded between stages
 
-### Shared Model Server (vLLM - Recommended)
+### Shared Model Server (vLLM + Transcription - Recommended)
 
-For higher throughput, deploy a shared vLLM server. This allows multiple workers 
-to share a single model, significantly improving resource utilisation.
+For highest throughput, deploy shared services for both LLM and transcription:
+
+| Service | GPU Memory | Purpose |
+|---------|------------|----------|
+| vLLM Server | ~18 GB | LLM inference (analysis, chat) |
+| Transcription Service | ~10 GB | WhisperX + pyannote diarization |
+| **Workers** | ~0 GB | Lightweight HTTP clients |
 
 **Benefits:**
 - ~10-12 workers instead of 5 (isolated)
 - Single 32B model for both analysis and chat
+- Single WhisperX instance for all transcription
 - Automatic request batching
-- Lower memory per worker (~8GB instead of ~22GB)
+- Lower memory per worker (~2GB instead of ~22GB)
+
+**Deploy Transcription Service:**
+
+```bash
+# Deploy shared transcription service
+kubectl apply -f k8s/transcription-deployment.yaml
+
+# Wait for WhisperX to load
+kubectl wait --for=condition=ready pod -l component=transcription --timeout=300s
+
+# Verify it's running
+kubectl logs -l component=transcription --tail=50
+```
 
 **Deploy vLLM:**
 
 ```bash
-# Deploy vLLM server (must complete before workers)
+# Deploy Text vLLM server (Qwen2.5-32B for transcript analysis)
 kubectl apply -f k8s/vllm-deployment.yaml
 
 # Wait for vLLM to be ready (model loading takes 2-5 minutes)
 kubectl wait --for=condition=ready pod -l app=vllm-server --timeout=600s
 
-# Enable vLLM in thor-deployment.yaml:
-# 1. Uncomment the llm-api-url line in the ConfigMap
-# 2. Uncomment the LLM_API_URL env vars in both deployments
+# (Optional) Deploy Audio vLLM server (Qwen2.5-Omni for audio mode)
+# Only needed if using ANALYSIS_MODE=audio
+kubectl apply -f k8s/audio-vllm-deployment.yaml
+kubectl wait --for=condition=ready pod -l app=audio-vllm-server --timeout=600s
 
 # Deploy workers
-kubectl apply -f k8s/thor-deployment.yaml
+kubectl apply -f k8s/deployment.yaml
 ```
 
 **Test vLLM:**
@@ -194,8 +214,39 @@ curl -X POST http://localhost:8000/v1/chat/completions \
 
 ```bash
 # .env or k8s configmap
-LLM_API_URL=http://vllm-server.voice-ai.svc.cluster.local:8000/v1
+
+# Text LLM (transcript analysis, chat)
+LLM_API_URL=http://vllm-server.default.svc.cluster.local:8000/v1
+
+# Audio LLM (audio analysis mode only - Qwen2.5-Omni)
+AUDIO_ANALYSIS_API_URL=http://audio-vllm-server.default.svc.cluster.local:8000/v1
+
 LLM_API_KEY=  # Optional, only if vLLM requires auth
+```
+
+**Test Transcription Service:**
+
+```bash
+# Port-forward to test locally
+kubectl port-forward svc/transcription-service 8001:8001
+
+# Check health
+curl http://localhost:8001/internal/health
+```
+
+**Environment Variables for shared services:**
+
+```bash
+# .env or k8s configmap
+
+# Text LLM (transcript analysis, chat) - Qwen2.5-32B
+LLM_API_URL=http://vllm-server:8000/v1
+
+# Audio LLM (audio mode only) - Qwen2.5-Omni
+AUDIO_ANALYSIS_API_URL=http://audio-vllm-server:8000/v1
+
+# Transcription with diarization - WhisperX
+TRANSCRIPTION_SERVICE_URL=http://transcription-service:8001
 ```
 
 ## Monitoring

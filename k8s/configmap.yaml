@@ -44,9 +44,17 @@ data:
   chat-model-path: "/models/chat"
   chat-model-quantization: "int4"
   
-  # vLLM Configuration (shared model server)
+  # vLLM Configuration (shared model server for text analysis)
   use-vllm: "true"
   vllm-base-url: "http://vllm-server:8000/v1"
+  
+  # Audio Analysis vLLM (Qwen2.5-Omni for audio mode)
+  # Only used when analysis-mode is 'audio'
+  audio-analysis-api-url: "http://audio-vllm-server:8000/v1"
+  
+  # Shared Transcription Service (WhisperX on GPU)
+  # Workers call this instead of loading their own WhisperX model
+  transcription-service-url: "http://transcription-service:8001"
   
   # LoRA Adapter Configuration (for fine-tuned analysis)
   analysis-adapter-name: "call-analysis"

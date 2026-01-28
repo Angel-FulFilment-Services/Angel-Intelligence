@@ -14,6 +14,7 @@ Complete reference for all Angel Intelligence environment variables.
 | AI_DB_PASSWORD | Yes | - | Database password |
 | USE_MOCK_MODELS | No | false | Enable mock mode |
 | ANALYSIS_MODE | No | audio | audio or transcript |
+| TRANSCRIPTION_SERVICE_URL | No | - | Shared WhisperX service URL |
 
 ---
 
@@ -214,6 +215,36 @@ TRANSCRIPT_SEGMENTATION=word
 
 ---
 
+### TRANSCRIPTION_SERVICE_URL
+
+**Required**: No  
+**Type**: String  
+**Default**: (empty - uses local model)
+
+URL of a shared WhisperX transcription service. When set, workers call this service via HTTP instead of loading their own WhisperX model, allowing multiple workers to share a single GPU-loaded model.
+
+**Architecture Benefits:**
+- **Memory Efficiency**: Single WhisperX instance (~10GB VRAM) shared by all workers
+- **Scalability**: Add more lightweight workers without GPU memory increase
+- **Parallelism**: Workers can call vLLM for LLM tasks while transcription runs
+
+**Example Setup:**
+```env
+# On the API pod (runs the transcription service)
+# Leave empty - loads WhisperX locally for /internal/transcribe endpoint
+
+# On worker pods (call the shared service)
+TRANSCRIPTION_SERVICE_URL=http://api-service:8000
+```
+
+Leave empty to load WhisperX locally (fallback mode for single-node deployment).
+
+```env
+TRANSCRIPTION_SERVICE_URL=http://localhost:8000
+```
+
+---
+
 ### MODELS_BASE_PATH
 
 **Required**: No  
@@ -265,10 +296,10 @@ CHAT_MODEL_PATH=/models/chat/base
 **Default**: (empty - use local models)
 
 OpenAI-compatible API URL for external LLM server (e.g., vLLM, TGI, Ollama).
-When set, both analysis and interactive services use this API instead of loading local models.
+When set, **transcript analysis** and **interactive chat** use this API instead of loading local models.
 
 ```env
-# vLLM server
+# vLLM server (text LLM - Qwen2.5-32B)
 LLM_API_URL=http://vllm-server:8000/v1
 
 # Ollama
@@ -283,6 +314,28 @@ LLM_API_URL=http://vllm-server.voice-ai.svc.cluster.local:8000/v1
 - Automatic request batching for higher throughput
 - Lower memory per worker
 - Can run 10-12 workers instead of 5-6 on Thor
+
+---
+
+### AUDIO_ANALYSIS_API_URL
+
+**Required**: No  
+**Type**: String  
+**Default**: (empty - use local Qwen2.5-Omni)
+
+OpenAI-compatible API URL for audio analysis vLLM server (Qwen2.5-Omni).
+When set **and** `ANALYSIS_MODE=audio`, workers use this API instead of loading local Qwen2.5-Omni.
+
+```env
+# Audio vLLM server (Qwen2.5-Omni-7B)
+AUDIO_ANALYSIS_API_URL=http://audio-vllm-server:8000/v1
+
+# Kubernetes internal
+AUDIO_ANALYSIS_API_URL=http://audio-vllm-server.default.svc.cluster.local:8000/v1
+```
+
+**Note:** This is separate from `LLM_API_URL` because audio analysis uses a different model
+(Qwen2.5-Omni) that can process audio input directly for tone, emotion, and voice quality analysis.
 
 ---
 

@@ -115,6 +115,7 @@ class CallRecording:
     enqref: Optional[str] = None              # Enquiry reference number
     obref: Optional[str] = None               # Outbound reference number
     client_ref: Optional[str] = None          # Client reference code
+    ddi: Optional[str] = None                 # DDI (phone number) for calltype group lookup
     campaign: Optional[str] = None            # Campaign name
     campaign_type: Optional[str] = None       # Campaign type for config lookup
     halo_id: Optional[int] = None             # Agent ID from Halo system
@@ -149,6 +150,7 @@ class CallRecording:
             enqref=row.get("enqref"),
             obref=row.get("obref"),
             client_ref=row.get("client_ref"),
+            ddi=row.get("ddi"),
             campaign=row.get("campaign"),
             campaign_type=row.get("campaign_type"),
             halo_id=row.get("halo_id"),

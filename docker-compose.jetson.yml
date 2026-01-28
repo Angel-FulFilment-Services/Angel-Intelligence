@@ -1,16 +1,87 @@
 version: '3.3'
 
+# ==============================================================================
+# Angel Intelligence - Jetson Docker Compose
+# ==============================================================================
+# Optimised for NVIDIA Jetson Orin/Thor deployment
+# Uses L4T-compatible images and GPU passthrough
+
 services:
-  angel-intelligence:
+  # ----------------------------------------------------------------------------
+  # API Gateway
+  # ----------------------------------------------------------------------------
+  api:
     build:
       context: .
       dockerfile: Dockerfile.jetson
-    container_name: angel-intelligence
-    network_mode: host
+    container_name: angel-intelligence-api
+    ports:
+      - "8000:8000"
     env_file:
       - .env
+    environment:
+      - WORKER_MODE=api
+      - WORKER_ID=api-gateway
     volumes:
-      - ./models:/workspace/models
+      - ./models:/workspace/models:ro
+    restart: unless-stopped
+    command: uvicorn src.api:app --host 0.0.0.0 --port 8000
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ----------------------------------------------------------------------------
+  # Transcription Service (Shared WhisperX on GPU)
+  # ----------------------------------------------------------------------------
+  transcription:
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+    container_name: angel-intelligence-transcription
+    ports:
+      - "8001:8001"
+    env_file:
+      - .env
+    environment:
+      - WORKER_MODE=api
+      - WORKER_ID=transcription-service
+      - USE_GPU=true
+    volumes:
+      - ./models:/workspace/models:ro
+      - ~/.cache/huggingface:/root/.cache/huggingface
+    runtime: nvidia
+    restart: unless-stopped
+    command: uvicorn src.api:app --host 0.0.0.0 --port 8001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/internal/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  # ----------------------------------------------------------------------------
+  # Worker (Processing - calls transcription + vLLM services)
+  # ----------------------------------------------------------------------------
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile.jetson
+    container_name: angel-intelligence-worker
+    env_file:
+      - .env
+    environment:
+      - WORKER_MODE=batch
+      - WORKER_ID=worker-1
+      - TRANSCRIPTION_SERVICE_URL=http://transcription:8001
+      # LLM_API_URL should point to vLLM service for text analysis
+      # AUDIO_ANALYSIS_API_URL should point to audio vLLM for audio mode
+    volumes:
+      - ./models:/workspace/models:ro
       - ~/.cache/huggingface:/root/.cache/huggingface
       - ./call-recordings:/workspace/call-recordings
     restart: unless-stopped
+    command: python -m src.worker.worker
+    depends_on:
+      - api
+      - transcription

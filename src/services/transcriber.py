@@ -3,8 +3,14 @@ Angel Intelligence - Transcription Service
 
 Audio transcription using WhisperX with word-level timestamps and speaker diarisation.
 Outputs British English transcripts.
+
+Supports two modes:
+1. Shared service mode: When TRANSCRIPTION_SERVICE_URL is set, uses HTTP proxy to call
+   a shared WhisperX service (allows multiple workers to share one GPU model)
+2. In-memory mode: When no service URL, loads model locally (fallback/standalone)
 """
 
+import asyncio
 import gc
 import logging
 import os
@@ -47,13 +53,18 @@ class TranscriptionService:
     - Word-level timestamp alignment
     - Speaker diarisation (requires HuggingFace token for pyannote)
     - Configurable model size (tiny, base, small, medium, large)
+    - Shared service mode for multi-worker GPU sharing
     """
     
     def __init__(self):
         """Initialise the transcription service."""
         settings = get_settings()
         
-        # Device configuration
+        # Check for shared transcription service URL
+        self.service_url = settings.transcription_service_url or ""
+        self._proxy = None
+        
+        # Device configuration (for local mode)
         self.device = "cuda" if torch.cuda.is_available() and settings.use_gpu else "cpu"
         self.compute_type = "float16" if self.device == "cuda" else "int8"
         self.batch_size = 16 if self.device == "cuda" else 4
@@ -65,13 +76,34 @@ class TranscriptionService:
         # HuggingFace token for pyannote diarization
         self.hf_token = settings.huggingface_token or None
         
-        # Models (lazy loaded)
+        # Models (lazy loaded for local mode)
         self._whisper_model = None
         self._alignment_model = None
         self._alignment_metadata = None
         self._diarize_model = None
         
-        logger.info(f"TranscriptionService initialised: device={self.device}, model={self.model_size}, diarization={'pyannote' if self.hf_token else 'fallback'}")
+        if self.service_url:
+            logger.info(f"TranscriptionService initialised in PROXY mode: {self.service_url}")
+        else:
+            logger.info(f"TranscriptionService initialised in LOCAL mode: device={self.device}, model={self.model_size}, diarization={'pyannote' if self.hf_token else 'fallback'}")
+    
+    def _get_proxy(self):
+        """Get or create the transcription proxy client."""
+        if self._proxy is None and self.service_url:
+            from src.services.transcriber_proxy import TranscriptionProxy
+            self._proxy = TranscriptionProxy(self.service_url)
+        return self._proxy
+    
+    async def _check_proxy_available(self) -> bool:
+        """Check if the transcription service is available."""
+        proxy = self._get_proxy()
+        if proxy:
+            try:
+                return await proxy.health_check()
+            except Exception as e:
+                logger.debug(f"Transcription service unavailable: {e}")
+                return False
+        return False
     
     def _ensure_model_loaded(self) -> None:
         """Ensure the Whisper model is loaded."""
@@ -96,6 +128,9 @@ class TranscriptionService:
         """
         Transcribe an audio file.
         
+        Tries the shared transcription service first (if configured),
+        then falls back to local in-memory processing.
+        
         Args:
             audio_path: Path to audio file (WAV format preferred)
             language: Language code (default 'en' for English)
@@ -108,10 +143,82 @@ class TranscriptionService:
             - language_detected: Detected language code
             - confidence: Overall confidence score
         """
+        # Try proxy mode first if configured
+        if self.service_url:
+            try:
+                return self._transcribe_via_proxy(audio_path, language, diarize)
+            except Exception as e:
+                logger.warning(f"Proxy transcription failed, falling back to local: {e}")
+        
+        # Fall back to local transcription
+        return self._transcribe_local(audio_path, language, diarize)
+    
+    def _transcribe_via_proxy(
+        self,
+        audio_path: str,
+        language: str = "en",
+        diarize: bool = True
+    ) -> Dict[str, Any]:
+        """Transcribe via the shared transcription service."""
+        import asyncio
+        
+        proxy = self._get_proxy()
+        if not proxy:
+            raise RuntimeError("Transcription proxy not available")
+        
+        logger.info(f"Transcribing via proxy: {audio_path}")
+        
+        # Run async proxy call in sync context
+        loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else asyncio.new_event_loop()
+        
+        async def _do_transcribe():
+            result = await proxy.transcribe(
+                audio_path=audio_path,
+                diarize=diarize,
+                language=language if language != "auto" else None,
+            )
+            return result
+        
+        # Handle both sync and async contexts
+        try:
+            if asyncio.get_event_loop().is_running():
+                # We're in an async context, create a new thread to run the async call
+                import concurrent.futures
+                with concurrent.futures.ThreadPoolExecutor() as executor:
+                    future = executor.submit(asyncio.run, _do_transcribe())
+                    result = future.result(timeout=300)
+            else:
+                result = asyncio.run(_do_transcribe())
+        except RuntimeError:
+            # No event loop, create one
+            result = asyncio.run(_do_transcribe())
+        
+        logger.info(f"Proxy transcription complete: {len(result.segments)} segments, {result.processing_time:.1f}s")
+        
+        # Convert to standard format
+        return {
+            "full_transcript": result.text,
+            "text": result.text,
+            "segments": result.segments,
+            "language_detected": result.language,
+            "language": result.language,
+            "confidence": 0.95,
+            "model_used": f"whisperx-{self.model_size}",
+            "processing_time": result.processing_time,
+            "duration": result.duration,
+        }
+    
+    def _transcribe_local(
+        self, 
+        audio_path: str, 
+        language: str = "en",
+        diarize: bool = True
+    ) -> Dict[str, Any]:
+        """Transcribe locally using in-memory WhisperX model."""
         self._ensure_model_loaded()
         
         start_time = time.time()
-        logger.info(f"Starting transcription: {audio_path}")
+        logger.info(f"Starting local transcription: {audio_path}")
         
         try:
             # Load audio
@@ -152,8 +259,10 @@ class TranscriptionService:
             
             return {
                 "full_transcript": full_transcript,
+                "text": full_transcript,
                 "segments": segments,
                 "language_detected": detected_language,
+                "language": detected_language,
                 "confidence": 0.95,  # WhisperX doesn't provide overall confidence
                 "model_used": f"whisperx-{self.model_size}",
                 "processing_time": processing_time,
@@ -341,9 +450,21 @@ class TranscriptionService:
         
         Call this after transcription is complete and before loading
         other models (e.g., analysis model) to avoid CUDA OOM errors.
-        """
-        logger.debug("Unloading transcription models to free GPU memory")
         
+        In proxy mode, this closes the HTTP client.
+        """
+        logger.debug("Unloading transcription resources")
+        
+        # Close proxy client if in proxy mode
+        if self._proxy is not None:
+            import asyncio
+            try:
+                asyncio.run(self._proxy.close())
+            except Exception:
+                pass
+            self._proxy = None
+        
+        # Unload local models
         if self._whisper_model is not None:
             del self._whisper_model
             self._whisper_model = None
@@ -363,8 +484,22 @@ class TranscriptionService:
         if torch.cuda.is_available():
             torch.cuda.empty_cache()
         
-        logger.info("Transcription models unloaded")
+        logger.info("Transcription resources unloaded")
     
     def is_available(self) -> bool:
-        """Check if transcription service is available."""
+        """
+        Check if transcription service is available.
+        
+        Returns True if either:
+        - A transcription service URL is configured, or
+        - WhisperX is installed locally
+        """
+        if self.service_url:
+            return True
         return WHISPERX_AVAILABLE
+    
+    def get_mode(self) -> str:
+        """Return the current transcription mode."""
+        if self.service_url:
+            return "proxy"
+        return "local"

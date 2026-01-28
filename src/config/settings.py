@@ -85,8 +85,13 @@ class Settings(BaseSettings):
     # vLLM/External API support (optional - for shared model serving)
     # When set, uses HTTP API instead of loading models locally
     # Format: http://vllm-server:8000/v1 (OpenAI-compatible endpoint)
-    llm_api_url: str = Field(default="", description="External LLM API URL (vLLM/TGI). When set, uses API for both analysis and chat")
+    llm_api_url: str = Field(default="", description="External LLM API URL (vLLM/TGI). When set, uses API for text analysis and chat")
     llm_api_key: str = Field(default="", description="API key for external LLM service (if required)")
+    
+    # Audio analysis API URL (vLLM serving Qwen2.5-Omni for audio mode)
+    # When set and analysis_mode='audio', uses this API instead of local Qwen2.5-Omni
+    # Format: http://audio-vllm:8000/v1 (OpenAI-compatible multimodal endpoint)
+    audio_analysis_api_url: str = Field(default="", description="vLLM API URL for audio analysis (Qwen2.5-Omni)")
     
     # LoRA adapter configuration (for fine-tuned models via vLLM)
     analysis_adapter_name: str = Field(default="call-analysis", description="LoRA adapter name for analysis (folder name under /models/adapters/)")
@@ -114,6 +119,11 @@ class Settings(BaseSettings):
     
     # Transcription settings
     transcript_segmentation: str = Field(default="word", description="Segmentation: 'word' or 'sentence'")
+    
+    # Transcription service URL for shared WhisperX (optional)
+    # When set, workers call this service instead of loading WhisperX locally
+    # This allows multiple workers to share a single GPU-loaded model
+    transcription_service_url: str = Field(default="", description="URL of transcription service (e.g., http://localhost:8000)")
     
     # HuggingFace token for pyannote speaker diarization
     # Get from https://huggingface.co/settings/tokens (read access)

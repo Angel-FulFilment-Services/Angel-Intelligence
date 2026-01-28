@@ -94,6 +94,45 @@ volumes:
   mysql_data:
 ```
 
+### High-Throughput Setup (Shared Services)
+
+For production with multiple workers sharing GPU models:
+
+```yaml
+# docker-compose.yml (excerpt)
+services:
+  # Shared transcription service (WhisperX on GPU)
+  transcription:
+    build: .
+    ports:
+      - "8001:8001"
+    environment:
+      - WORKER_MODE=api
+      - WHISPER_MODEL=medium
+      - USE_GPU=true
+    command: uvicorn src.api:app --host 0.0.0.0 --port 8001
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
+  # Workers call shared services instead of loading models
+  worker:
+    build: .
+    environment:
+      - TRANSCRIPTION_SERVICE_URL=http://transcription:8001
+      - LLM_API_URL=http://vllm:8000/v1  # Text LLM (transcript analysis)
+      - AUDIO_ANALYSIS_API_URL=http://audio-vllm:8000/v1  # Audio LLM (if ANALYSIS_MODE=audio)
+    command: python -m src.worker.worker
+    depends_on:
+      - transcription
+```
+
+See `docker-compose.yml` for the complete configuration.
+
 ---
 
 ### Development Setup

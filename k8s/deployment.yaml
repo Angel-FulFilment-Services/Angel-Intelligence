@@ -220,6 +220,20 @@ spec:
               name: angel-intelligence-config
               key: vllm-base-url
         
+        # Audio analysis vLLM (Qwen2.5-Omni for audio mode)
+        - name: AUDIO_ANALYSIS_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: audio-analysis-api-url
+        
+        # Shared transcription service (WhisperX on GPU)
+        - name: TRANSCRIPTION_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: transcription-service-url
+        
         # LoRA adapter for fine-tuned analysis
         - name: ANALYSIS_ADAPTER_NAME
           valueFrom:
@@ -581,6 +595,13 @@ spec:
             configMapKeyRef:
               name: angel-intelligence-config
               key: vllm-base-url
+        
+        # Audio analysis vLLM (Qwen2.5-Omni for audio mode)
+        - name: AUDIO_ANALYSIS_API_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: audio-analysis-api-url
         
         # LoRA adapter for fine-tuned analysis
         - name: ANALYSIS_ADAPTER_NAME

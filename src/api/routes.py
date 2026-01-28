@@ -2599,6 +2599,28 @@ class InternalHealthResponse(BaseModel):
     worker_id: str = ""
 
 
+class InternalTranscribeRequest(BaseModel):
+    """Request for internal transcription service."""
+    audio_base64: str = Field(..., description="Base64-encoded audio data")
+    filename: str = Field(default="audio.wav", description="Original filename for format detection")
+    diarize: bool = Field(default=True, description="Whether to perform speaker diarization")
+    language: Optional[str] = Field(default=None, description="Language code (auto-detect if None)")
+    num_speakers: Optional[int] = Field(default=None, description="Expected number of speakers")
+
+
+class InternalTranscribeResponse(BaseModel):
+    """Response from internal transcription service."""
+    text: str = ""
+    segments: List[Dict[str, Any]] = []
+    language: str = "unknown"
+    duration: float = 0.0
+    word_count: int = 0
+    processing_time: float = 0.0
+    error: bool = False
+    error_type: Optional[str] = None
+    error_message: Optional[str] = None
+
+
 @router.post(
     "/internal/chat",
     response_model=InternalChatResponse,
@@ -2771,3 +2793,98 @@ async def internal_health():
         device=device,
         worker_id=settings.worker_id,
     )
+
+
+# =============================================================================
+# Internal Transcription Endpoint (for shared WhisperX service)
+# =============================================================================
+
+# Singleton transcription service for shared access
+_transcription_service = None
+_transcription_service_lock = None
+
+
+def get_transcription_service():
+    """Get or create the shared transcription service."""
+    global _transcription_service, _transcription_service_lock
+    import asyncio
+    
+    if _transcription_service_lock is None:
+        _transcription_service_lock = asyncio.Lock()
+    
+    if _transcription_service is None:
+        from src.services.transcriber import TranscriptionService
+        _transcription_service = TranscriptionService()
+    
+    return _transcription_service
+
+
+@router.post(
+    "/internal/transcribe",
+    response_model=InternalTranscribeResponse,
+)
+async def internal_transcribe(request: InternalTranscribeRequest):
+    """
+    Internal transcription endpoint for shared WhisperX service.
+    
+    This endpoint allows multiple workers to share a single GPU-loaded
+    WhisperX model instead of each loading their own (which wastes VRAM).
+    
+    The audio is sent as base64-encoded data to avoid file system
+    dependencies between services.
+    """
+    import base64
+    import tempfile
+    import time
+    from pathlib import Path
+    
+    start_time = time.time()
+    
+    try:
+        # Decode audio data
+        audio_bytes = base64.b64decode(request.audio_base64)
+        
+        # Write to temp file (WhisperX needs file path)
+        suffix = Path(request.filename).suffix or ".wav"
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(audio_bytes)
+            tmp_path = tmp.name
+        
+        try:
+            # Get transcription service
+            service = get_transcription_service()
+            
+            # Transcribe
+            result = service.transcribe(
+                audio_path=tmp_path,
+                diarize=request.diarize,
+            )
+            
+            processing_time = time.time() - start_time
+            
+            # Format response
+            return InternalTranscribeResponse(
+                text=result.get("text", ""),
+                segments=result.get("segments", []),
+                language=result.get("language", "unknown"),
+                duration=result.get("duration", 0.0),
+                word_count=len(result.get("text", "").split()),
+                processing_time=processing_time,
+                error=False,
+            )
+            
+        finally:
+            # Clean up temp file
+            try:
+                os.unlink(tmp_path)
+            except Exception:
+                pass
+                
+    except Exception as e:
+        logger.error(f"Internal transcription error: {e}")
+        return InternalTranscribeResponse(
+            error=True,
+            error_type="transcription_error",
+            error_message=str(e),
+        )
+

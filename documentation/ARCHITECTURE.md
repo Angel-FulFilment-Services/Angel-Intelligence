@@ -47,6 +47,51 @@ Angel Intelligence supports different worker modes to separate batch and interac
 
 Adjust the ratio of batch:interactive nodes based on your workload. Start with N-1 batch workers and 1 interactive node.
 
+### Shared Services Architecture (Recommended for High Throughput)
+
+For maximum GPU efficiency, use shared model services:
+
+```
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                          NVIDIA Jetson GPU Cluster                          │
+├─────────────────────────────────────────────────────────────────────────────┤
+│                                                                             │
+│  ┌────────────────────────┐  ┌────────────────────────┐  ┌───────────────┐  │
+│  │   Text vLLM Server     │  │   Audio vLLM Server    │  │ Transcription │  │
+│  │  (Qwen2.5-32B-AWQ)     │  │  (Qwen2.5-Omni-7B)     │  │   Service     │  │
+│  │     Port 8000          │  │     Port 8002          │  │  (WhisperX)   │  │
+│  │ /v1/chat/completions   │  │ /v1/chat/completions   │  │  Port 8001    │  │
+│  │                        │  │   (with audio_url)     │  │               │  │
+│  │ Used for:              │  │ Used for:              │  │ Used for:     │  │
+│  │ • Transcript analysis  │  │ • Audio mode analysis  │  │ • Transcription│ │
+│  │ • Chat/interactive     │  │ • Tone/emotion detect  │  │ • Diarization │  │
+│  │ • Text-based queries   │  │ • Voice quality eval   │  │ • Timestamps  │  │
+│  └──────────┬─────────────┘  └──────────┬─────────────┘  └───────┬───────┘  │
+│             │                           │                        │          │
+│             └───────────────────────────┴────────────────────────┘          │
+│                                         │                                   │
+│  ┌──────────────────────────────────────┴──────────────────────────────┐   │
+│  │                   Workers (Lightweight, No GPU)                      │   │
+│  │   • Call Text vLLM for transcript analysis (LLM_API_URL)            │   │
+│  │   • Call Audio vLLM for audio analysis (AUDIO_ANALYSIS_API_URL)     │   │
+│  │   • Call Transcription Service (TRANSCRIPTION_SERVICE_URL)          │   │
+│  │   • PII detection runs locally (CPU-only)                           │   │
+│  │   • Can run 5-10 workers in parallel                                │   │
+│  └─────────────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────────────┘
+```
+
+**Analysis Modes:**
+- `transcript` mode: Uses Text vLLM (Qwen2.5-32B-AWQ) - analyses text only
+- `audio` mode: Uses Audio vLLM (Qwen2.5-Omni-7B) - analyses audio directly for tone/emotion
+
+**Key Benefits:**
+- Single WhisperX instance (~10GB) shared by all workers
+- Separate LLM instances optimised for their workload
+- Audio analysis captures tone, emotion, pacing - not available in transcript mode
+- Workers become lightweight (just HTTP clients + PII detection)
+- 5-10x more parallel workers per GPU
+
 ---
 
 ## System Components

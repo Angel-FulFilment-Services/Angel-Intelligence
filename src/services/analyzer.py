@@ -21,6 +21,8 @@ import torch
 
 from src.config import get_settings
 from src.database.models import calculate_quality_score, get_quality_zone
+from src.services.enquiry_context import get_enquiry_context_service
+from src.services.order_context import get_order_context_service
 
 logger = logging.getLogger(__name__)
 
@@ -120,6 +122,9 @@ class AnalysisService:
         self.llm_api_url = getattr(settings, 'llm_api_url', '') or ''
         self.llm_api_key = getattr(settings, 'llm_api_key', '') or ''
         
+        # Audio analysis API (vLLM serving Qwen2.5-Omni) - when set, uses API for audio mode
+        self.audio_analysis_api_url = getattr(settings, 'audio_analysis_api_url', '') or ''
+        
         # LoRA adapter name for vLLM (e.g., "call-analysis", "email-analysis")
         self.analysis_adapter_name = getattr(settings, 'analysis_adapter_name', 'call-analysis') or 'call-analysis'
         
@@ -138,8 +143,12 @@ class AnalysisService:
         # Legacy: Load config for backwards compatibility
         self._config = self._load_config()
         
-        mode_desc = "vLLM API" if self.llm_api_url else f"local ({self.device})"
-        logger.info(f"AnalysisService initialised: mode={self.analysis_mode}, backend={mode_desc}")
+        # Log initialisation with backend details
+        if self.analysis_mode == "audio":
+            backend_desc = "vLLM API" if self.audio_analysis_api_url else f"local ({self.device})"
+        else:
+            backend_desc = "vLLM API" if self.llm_api_url else f"local ({self.device})"
+        logger.info(f"AnalysisService initialised: mode={self.analysis_mode}, backend={backend_desc}")
     
     def _load_config(self, config_path: str = "call_analysis_config.json") -> Dict[str, Any]:
         """Load analysis configuration."""
@@ -333,7 +342,10 @@ class AnalysisService:
         recording_id: int,
         client_ref: Optional[str] = None,
         campaign_type: Optional[str] = None,
-        direction: Optional[str] = None
+        direction: Optional[str] = None,
+        enqref: Optional[str] = None,
+        orderref: Optional[str] = None,
+        ddi: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Analyse a call recording.
@@ -345,6 +357,9 @@ class AnalysisService:
             client_ref: Client reference for client-specific config (optional)
             campaign_type: Campaign type for campaign-specific config (optional)
             direction: Call direction for direction-specific config (optional)
+            enqref: Enquiry reference for calltype validation (optional)
+            orderref: Order reference for data capture validation (optional)
+            ddi: DDI phone number for calltype group lookup (optional)
             
         Returns:
             Analysis results dictionary
@@ -354,14 +369,54 @@ class AnalysisService:
         # Calculate speaker metrics (always needed)
         speaker_metrics = self._calculate_speaker_metrics(transcript)
         
+        # Build combined context from enquiry and order data
+        context_parts = []
+        
+        # Get enquiry context for calltype validation (if enqref provided)
+        if enqref and client_ref:
+            try:
+                enquiry_service = get_enquiry_context_service()
+                enquiry_context = enquiry_service.get_enquiry_context(
+                    enqref=enqref,
+                    client_ref=client_ref,
+                    ddi=ddi
+                )
+                if enquiry_context.has_context:
+                    context_parts.append(enquiry_context.to_prompt_context())
+                    logger.info(f"Enquiry context loaded for {enqref}: {len(enquiry_context.available_calltypes)} calltypes available")
+                elif enquiry_context.error:
+                    logger.debug(f"No enquiry context for {enqref}: {enquiry_context.error}")
+            except Exception as e:
+                logger.warning(f"Failed to get enquiry context: {e}")
+        
+        # Get order context for data capture validation (if orderref provided)
+        if orderref and client_ref:
+            try:
+                order_service = get_order_context_service()
+                order_context = order_service.get_order_context(
+                    orderref=orderref,
+                    client_ref=client_ref,
+                    ddi=ddi
+                )
+                if order_context.has_context:
+                    context_parts.append(order_context.to_prompt_context())
+                    logger.info(f"Order context loaded for {orderref}")
+                elif order_context.error:
+                    logger.debug(f"No order context for {orderref}: {order_context.error}")
+            except Exception as e:
+                logger.warning(f"Failed to get order context: {e}")
+        
+        # Combine context parts
+        combined_context_str = "\n\n".join(context_parts) if context_parts else ""
+        
         if self.use_mock:
             logger.info("Using mock analysis response")
             return self._mock_analysis(speaker_metrics, start_time)
         
         if self.analysis_mode == "audio" and audio_path:
-            return self._analyse_audio(audio_path, transcript, speaker_metrics, start_time, client_ref, campaign_type, direction)
+            return self._analyse_audio(audio_path, transcript, speaker_metrics, start_time, client_ref, campaign_type, direction, combined_context_str)
         else:
-            return self._analyse_transcript(transcript, speaker_metrics, start_time, client_ref, campaign_type, direction)
+            return self._analyse_transcript(transcript, speaker_metrics, start_time, client_ref, campaign_type, direction, combined_context_str)
     
     def _calculate_speaker_metrics(self, transcript: Dict[str, Any]) -> Dict[str, Any]:
         """Calculate metrics for each speaker matching specification format."""
@@ -474,12 +529,11 @@ class AnalysisService:
         start_time: float,
         client_ref: Optional[str] = None,
         campaign_type: Optional[str] = None,
-        direction: Optional[str] = None
+        direction: Optional[str] = None,
+        additional_context_str: str = ""
     ) -> Dict[str, Any]:
         """Analyse call using audio directly with transcript context."""
         try:
-            self._ensure_analysis_model_loaded()
-            
             # Format transcript with timestamps and segment IDs (same as transcript analysis)
             formatted_transcript, segment_map = self._format_transcript_with_timestamps(transcript)
             
@@ -493,6 +547,27 @@ class AnalysisService:
                 direction=direction,
                 client_ref=client_ref
             )
+            
+            # Merge additional context (enquiry/order data) into prompt_context
+            if additional_context_str:
+                existing_context = merged_config.get("prompt_context", "")
+                merged_config["prompt_context"] = f"{existing_context}\n\n{additional_context_str}".strip()
+            
+            # Use vLLM API if configured, otherwise use local model
+            if self.audio_analysis_api_url:
+                return self._analyse_audio_via_api(
+                    audio_path=audio_path,
+                    transcript=transcript,
+                    formatted_transcript=formatted_transcript,
+                    segment_map=segment_map,
+                    speaker_metrics=speaker_metrics,
+                    max_timestamp=max_timestamp,
+                    merged_config=merged_config,
+                    start_time=start_time
+                )
+            
+            # Local model path - load Qwen2.5-Omni
+            self._ensure_analysis_model_loaded()
             
             # Preprocess audio
             processed_audio = self._preprocess_audio(audio_path)
@@ -559,8 +634,9 @@ class AnalysisService:
             logger.error(f"Audio analysis failed: {e}", exc_info=True)
             return self._empty_analysis(speaker_metrics, start_time)
         finally:
-            # Free GPU memory for next recording's transcription
-            self._unload_analysis_model()
+            # Free GPU memory for next recording's transcription (only if using local model)
+            if not self.audio_analysis_api_url:
+                self._unload_analysis_model()
     
     def _unload_analysis_model(self) -> None:
         """Unload audio analysis model to free GPU memory."""
@@ -576,6 +652,214 @@ class AnalysisService:
             if torch.cuda.is_available():
                 torch.cuda.empty_cache()
     
+    def _analyse_audio_via_api(
+        self,
+        audio_path: str,
+        transcript: Dict[str, Any],
+        formatted_transcript: str,
+        segment_map: Dict[str, Dict],
+        speaker_metrics: Dict[str, Any],
+        max_timestamp: float,
+        merged_config: Dict[str, Any],
+        start_time: float
+    ) -> Dict[str, Any]:
+        """
+        Analyse call audio using vLLM API serving Qwen2.5-Omni.
+        
+        Uses OpenAI-compatible multimodal endpoint with base64-encoded audio.
+        """
+        import base64
+        import httpx
+        
+        try:
+            # Build the analysis prompt (same structure as chunk analysis)
+            prompt = self._build_audio_analysis_prompt(
+                formatted_transcript=formatted_transcript,
+                max_timestamp=max_timestamp,
+                merged_config=merged_config
+            )
+            
+            # Read and encode audio as base64
+            with open(audio_path, 'rb') as f:
+                audio_bytes = f.read()
+            audio_b64 = base64.b64encode(audio_bytes).decode('utf-8')
+            
+            # Determine audio MIME type
+            if audio_path.endswith('.mp3'):
+                mime_type = 'audio/mpeg'
+            elif audio_path.endswith('.wav'):
+                mime_type = 'audio/wav'
+            elif audio_path.endswith('.ogg'):
+                mime_type = 'audio/ogg'
+            else:
+                mime_type = 'audio/wav'  # Default assumption
+            
+            # Build multimodal message with audio
+            messages = [
+                {
+                    "role": "user",
+                    "content": [
+                        {
+                            "type": "audio_url",
+                            "audio_url": {
+                                "url": f"data:{mime_type};base64,{audio_b64}"
+                            }
+                        },
+                        {
+                            "type": "text",
+                            "text": prompt
+                        }
+                    ]
+                }
+            ]
+            
+            headers = {"Content-Type": "application/json"}
+            if self.llm_api_key:
+                headers["Authorization"] = f"Bearer {self.llm_api_key}"
+            
+            payload = {
+                "model": self.settings.analysis_model,  # Qwen2.5-Omni-7B
+                "messages": messages,
+                "max_tokens": 2000,
+                "temperature": 0,  # Deterministic for structured output
+            }
+            
+            logger.info(f"Sending audio analysis request to vLLM API: {self.audio_analysis_api_url}")
+            
+            with httpx.Client(timeout=600.0) as client:  # Long timeout for audio processing
+                response = client.post(
+                    f"{self.audio_analysis_api_url}/chat/completions",
+                    json=payload,
+                    headers=headers
+                )
+                response.raise_for_status()
+            
+            result_json = response.json()
+            content = result_json["choices"][0]["message"]["content"]
+            
+            logger.debug(f"Audio API response (first 500 chars): {content[:500]}")
+            
+            # Parse response using same parser as local analysis
+            result = self._parse_analysis_response(content, speaker_metrics)
+            
+            # Enrich segment_ids with timestamps
+            result = self._enrich_segment_timestamps(result, segment_map)
+            
+            result["processing_time"] = time.time() - start_time
+            result["analysis_type"] = "audio_api"
+            
+            return result
+            
+        except httpx.HTTPStatusError as e:
+            logger.error(f"Audio analysis API error: {e.response.status_code} - {e.response.text}")
+            raise
+        except Exception as e:
+            logger.error(f"Audio analysis via API failed: {e}", exc_info=True)
+            raise
+    
+    def _build_audio_analysis_prompt(
+        self,
+        formatted_transcript: str,
+        max_timestamp: float,
+        merged_config: Dict[str, Any]
+    ) -> str:
+        """Build prompt for audio-based analysis via API."""
+        # Extract config values
+        topics = merged_config.get("topics", [])
+        actions = merged_config.get("agent_actions", [])
+        rubric = merged_config.get("performance_rubric", [])
+        prompt_context = merged_config.get("prompt_context", "")
+        
+        # Build lists
+        topic_list = ", ".join(topics) if topics else "donation, gift aid, regular giving, complaints, account updates"
+        action_list = ", ".join(actions) if actions else "greeting, verification, explanation, objection handling, closing"
+        
+        # Convert rubric items to valid JSON keys
+        def to_key(name: str) -> str:
+            if isinstance(name, dict):
+                name = name.get("name", "")
+            return name.replace(" ", "_").replace("&", "and").replace("/", "_")
+        
+        perf_keys = [to_key(r) for r in rubric] if rubric else [
+            "Empathy", "Clarity", "Listening", "Script_adherence",
+            "Product_knowledge", "Rapport_building", "Objection_handling", "Closing_effectiveness"
+        ]
+        perf_keys_list = ", ".join(perf_keys)
+        perf_scores_json = ",\n        ".join([f'"{k}": 1-10' for k in perf_keys])
+        
+        context_section = f"\n{prompt_context}\n" if prompt_context else ""
+        
+        return f"""You are an expert call quality analyst for charity supporter engagement calls.
+Analyse this audio recording alongside its transcript.
+{context_section}
+CALL DURATION: {max_timestamp:.1f} seconds
+
+TRANSCRIPT (each line has [segment_id] [start - end] Speaker: text):
+{formatted_transcript}
+
+TOPICS TO IDENTIFY: {topic_list}
+AGENT ACTIONS TO DETECT: {action_list}
+PERFORMANCE CRITERIA: {perf_keys_list}
+
+Return your analysis as valid JSON matching this exact structure:
+
+{{
+    "summary": "2-3 sentence British English summary describing the call purpose, outcome, and notable moments",
+    "sentiment_score": 0 to 10 (0=hostile, 5=neutral, 10=very friendly),
+    "key_topics": [
+        {{"name": "Topic Name In Title Case", "confidence": 0.0-1.0}}
+    ],
+    "agent_actions": [
+        {{"action": "specific action the agent took", "segment_ids": ["seg_001", "seg_002"]}}
+    ],
+    "score_impacts": [
+        {{"segment_ids": ["seg_001"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote from transcript"}}
+    ],
+    "compliance_flags": [
+        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_001", "seg_002"], "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
+    ],
+    "performance_scores": {{
+        {perf_scores_json}
+    }},
+    "audio_observations": {{
+        "agent_tone": "warm/neutral/cold/hostile",
+        "agent_emotion": "calm/frustrated/happy/anxious/other",
+        "supporter_emotion": "calm/frustrated/happy/anxious/other",
+        "speech_clarity": 1-10,
+        "background_noise": "low/medium/high",
+        "pacing": "rushed/steady/slow"
+    }},
+    "action_items": [
+        {{"description": "specific follow-up action needed", "priority": "high/medium/low"}}
+    ]
+}}
+
+AUDIO ANALYSIS GUIDANCE:
+- Listen for TONE OF VOICE - warmth, empathy, frustration, impatience
+- Listen for PACING - rushing through information, giving supporter time to respond
+- Listen for INTERRUPTIONS - agent cutting off supporter
+- Listen for BACKGROUND NOISE affecting call quality
+- Use segment_ids ARRAY to reference specific moments - actions/impacts can span multiple segments
+- Include specific quotes from the transcript as evidence
+- ANALYSE THE ENTIRE CALL from start to finish
+
+SEGMENT IDS - CRITICAL:
+- segment_ids is an ARRAY - use ["seg_001"] for single segment or ["seg_001", "seg_002"] for spans
+- Copy segment_id values EXACTLY from the transcript
+- Do NOT invent segment IDs - only use ones that appear in the transcript
+
+SCORE IMPACT SCALE:
+- +5: Exceptional moment (exemplary)
+- +3 to +4: Strong positive
+- +1 to +2: Minor positive
+- -1 to -2: Minor negative
+- -3 to -4: Significant negative
+- -5: Severe issue
+
+COMPLIANCE FLAGS: Only include if actual issues detected. Use empty array [] if none.
+
+Return ONLY valid JSON - no text before or after."""
+
     def _analyse_transcript(
         self, 
         transcript: Dict[str, Any],
@@ -583,7 +867,8 @@ class AnalysisService:
         start_time: float,
         client_ref: Optional[str] = None,
         campaign_type: Optional[str] = None,
-        direction: Optional[str] = None
+        direction: Optional[str] = None,
+        additional_context_str: str = ""
     ) -> Dict[str, Any]:
         """Analyse call using transcript text only (with text-only model or API)."""
         try:
@@ -604,6 +889,11 @@ class AnalysisService:
                 direction=direction,
                 client_ref=client_ref
             )
+            
+            # Merge additional context (enquiry/order data) into prompt_context
+            if additional_context_str:
+                existing_context = merged_config.get("prompt_context", "")
+                merged_config["prompt_context"] = f"{existing_context}\n\n{additional_context_str}".strip()
             
             # Build prompt with context and merged config (includes overrides)
             prompt = self._build_transcript_analysis_prompt(
@@ -968,13 +1258,13 @@ Return your analysis as valid JSON matching this exact structure:
         {{"name": "Topic Name", "confidence": 0.0-1.0}}
     ],
     "agent_actions": [
-        {{"action": "specific action", "segment_id": "seg_XXX"}}
+        {{"action": "specific action", "segment_ids": ["seg_XXX"]}}
     ],
     "score_impacts": [
-        {{"segment_id": "seg_XXX", "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote"}}
+        {{"segment_ids": ["seg_XXX"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote"}}
     ],
     "compliance_flags": [
-        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_id": "seg_XXX", "severity": "low/medium/high/critical", "issue": "description", "quote": "exact quote"}}
+        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_XXX"], "severity": "low/medium/high/critical", "issue": "description", "quote": "exact quote"}}
     ],
     "performance_scores": {{
         {perf_scores_json}
@@ -994,8 +1284,10 @@ AUDIO ANALYSIS GUIDANCE:
 - Listen for PACING - rushing through information, giving supporter time to respond
 - Listen for INTERRUPTIONS - agent cutting off supporter
 - Listen for BACKGROUND NOISE affecting call quality
-- Use segment_ids from the transcript to reference specific moments
+- Use segment_ids ARRAY to reference specific moments - can span multiple segments
 - Include quotes from the transcript as evidence
+
+SEGMENT IDS: Use array format ["seg_XXX"] or ["seg_XXX", "seg_YYY"] for spans
 
 SCORE IMPACT SCALE:
 - +5: Exceptional moment (exemplary)
@@ -1127,13 +1419,13 @@ Return your analysis as valid JSON matching this exact structure:
         {{"name": "Topic Name In Title Case", "confidence": 0.0-1.0}}
     ],
     "agent_actions": [
-        {{"action": "specific action the agent took", "segment_id": "seg_001"}}
+        {{"action": "specific action the agent took", "segment_ids": ["seg_001", "seg_002"]}}
     ],
     "score_impacts": [
-        {{"segment_id": "seg_001", "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote from transcript"}}
+        {{"segment_ids": ["seg_001"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote from transcript"}}
     ],
     "compliance_flags": [
-        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_id": "seg_001", "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
+        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_001", "seg_002"], "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
     ],
     "performance_scores": {{
         {perf_scores_json}
@@ -1146,14 +1438,14 @@ Return your analysis as valid JSON matching this exact structure:
 ANALYSIS GUIDANCE:
 - ANALYSE THE ENTIRE TRANSCRIPT from start to finish - do not focus only on the beginning
 - Capture actions from all parts of the call: opening, middle, AND closing sections
-- Use the segment_id (e.g., "seg_001") from the transcript - copy it exactly
+- Use segment_ids ARRAY to reference specific moments - actions/impacts can span multiple segments
 - Include specific quotes from the transcript as evidence
 - Flag any compliance issues: GDPR, payment security, misleading information, rudeness
 - Identify: rushing, interrupting, poor listening, weak objection handling, unclear explanations, lack of empathy, missed upsell opportunities
 
 AGENT ACTIONS (neutral identification):
 - Simply identify WHAT the agent did and WHEN - no judgement
-- Use the segment_id to reference where in the call this happened
+- Use segment_ids array to reference where in the call this happened (can span multiple segments)
 - Examples: "Greeted supporter", "Verified identity", "Explained Gift Aid", "Handled objection", "Closed call"
 
 SCORE IMPACTS (quality judgements):
@@ -1184,9 +1476,11 @@ ARRAY LIMITS (do not exceed):
 - compliance_flags: only actual issues found - use empty array [] if none
 
 SEGMENT IDs - CRITICAL:
+- segment_ids is an ARRAY - use ["seg_001"] for single segment or ["seg_001", "seg_002", "seg_003"] for spans
 - Copy segment_id values EXACTLY from the transcript (e.g., "seg_001", "seg_015")
 - Each segment_id references a specific line in the transcript above
 - Do NOT invent segment IDs - only use ones that appear in the transcript
+- Use multiple segment_ids when an action/impact spans multiple transcript segments
 
 CRITICAL RULES:
 - Each array item must be unique - DO NOT repeat yourself
@@ -1218,14 +1512,14 @@ Return your analysis as valid JSON matching this EXACT structure:
         {{"name": "Gift Aid", "confidence": 0.8}}
     ],
     "agent_actions": [
-        {{"action": "Greeted supporter", "segment_id": "seg_001"}},
-        {{"action": "Verified identity", "segment_id": "seg_005"}},
-        {{"action": "Explained donation options", "segment_id": "seg_012"}},
-        {{"action": "Closed call", "segment_id": "seg_025"}}
+        {{"action": "Greeted supporter", "segment_ids": ["seg_001"]}},
+        {{"action": "Verified identity", "segment_ids": ["seg_005", "seg_006"]}},
+        {{"action": "Explained donation options", "segment_ids": ["seg_012", "seg_013", "seg_014"]}},
+        {{"action": "Closed call", "segment_ids": ["seg_025"]}}
     ],
     "score_impacts": [
-        {{"segment_id": "seg_001", "impact": 3, "category": "{perf_keys[0] if perf_keys else 'Empathy'}", "reason": "Warm, friendly greeting", "quote": "Good morning, lovely to speak with you!"}},
-        {{"segment_id": "seg_015", "impact": -2, "category": "{perf_keys[2] if len(perf_keys) > 2 else 'Listening'}", "reason": "Interrupted supporter", "quote": "Yes but what I meant was--"}}
+        {{"segment_ids": ["seg_001"], "impact": 3, "category": "{perf_keys[0] if perf_keys else 'Empathy'}", "reason": "Warm, friendly greeting", "quote": "Good morning, lovely to speak with you!"}},
+        {{"segment_ids": ["seg_015"], "impact": -2, "category": "{perf_keys[2] if len(perf_keys) > 2 else 'Listening'}", "reason": "Interrupted supporter", "quote": "Yes but what I meant was--"}}
     ],
     "compliance_flags": [],
     "performance_scores": {{
@@ -1264,7 +1558,7 @@ CRITICAL RULES:
 8. For compliance_flags: ONLY include ACTUAL issues - use empty array [] if no issues found
 9. Use Title Case for topic names (e.g., "Regular Giving", "Gift Aid", "Direct Debit")
 10. Compliance issues should ALSO appear in score_impacts with negative impact
-11. SEGMENT IDs - copy exactly from transcript (e.g., "seg_001") - do NOT invent them"""
+11. SEGMENT IDs - use array format ["seg_001"] or ["seg_001", "seg_002"] for spans - copy exactly from transcript"""
     
     def _generate_text_response(self, prompt: str) -> str:
         """Generate text response from model."""
@@ -1404,10 +1698,15 @@ CRITICAL RULES:
     
     def _enrich_segment_timestamps(self, result: Dict[str, Any], segment_map: Dict[str, Dict]) -> Dict[str, Any]:
         """
-        Enrich segment_id references with actual timestamps from the segment_map.
+        Enrich segment_ids references with actual timestamps from the segment_map.
         
-        The LLM outputs segment_id values (e.g., "seg_001"), and we look up the 
-        actual start/end timestamps from the transcript segments.
+        The LLM outputs segment_ids arrays (e.g., ["seg_001", "seg_002"]), and we look up
+        the actual start/end timestamps from the transcript segments.
+        
+        For arrays, timestamp_start is the start of the first segment and timestamp_end
+        is the end of the last segment in the array.
+        
+        Also handles legacy single segment_id format for backwards compatibility.
         
         This ensures timestamps are always accurate since they come from the 
         original transcript, not from LLM hallucination.
@@ -1420,18 +1719,37 @@ CRITICAL RULES:
         
         def enrich(item: Dict) -> Dict:
             nonlocal enriched_count, invalid_count
-            segment_id = item.get("segment_id")
-            if segment_id and segment_id in segment_map:
-                seg_info = segment_map[segment_id]
-                item["timestamp_start"] = seg_info["start"]
-                item["timestamp_end"] = seg_info["end"]
-                enriched_count += 1
-            elif segment_id:
-                # Invalid segment_id - set to 0
-                logger.debug(f"Invalid segment_id '{segment_id}' not in transcript")
-                item["timestamp_start"] = 0.0
-                item["timestamp_end"] = 0.0
-                invalid_count += 1
+            
+            # Handle new array format (segment_ids)
+            segment_ids = item.get("segment_ids")
+            
+            # Backwards compatibility: convert legacy segment_id string to array
+            if not segment_ids and item.get("segment_id"):
+                segment_ids = [item.get("segment_id")]
+                item["segment_ids"] = segment_ids  # Normalise to array format
+                del item["segment_id"]  # Remove legacy field
+            
+            if segment_ids and isinstance(segment_ids, list) and len(segment_ids) > 0:
+                # Filter to valid segment_ids only
+                valid_ids = [sid for sid in segment_ids if sid in segment_map]
+                invalid_ids = [sid for sid in segment_ids if sid not in segment_map]
+                
+                if invalid_ids:
+                    logger.debug(f"Invalid segment_ids {invalid_ids} not in transcript")
+                    invalid_count += len(invalid_ids)
+                
+                if valid_ids:
+                    # Get timestamps spanning from first to last valid segment
+                    first_seg = segment_map[valid_ids[0]]
+                    last_seg = segment_map[valid_ids[-1]]
+                    item["timestamp_start"] = first_seg["start"]
+                    item["timestamp_end"] = last_seg["end"]
+                    enriched_count += 1
+                else:
+                    # No valid segment_ids - set to 0
+                    item["timestamp_start"] = 0.0
+                    item["timestamp_end"] = 0.0
+            
             return item
         
         # Enrich agent_actions

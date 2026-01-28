@@ -80,6 +80,13 @@ services:
       - ANALYSIS_MODEL=${ANALYSIS_MODEL:-Qwen/Qwen2.5-Omni-7B}
       - USE_MOCK_MODELS=${USE_MOCK_MODELS:-false}
       
+      # Shared Transcription Service (GPU model sharing)
+      - TRANSCRIPTION_SERVICE_URL=http://transcription:8001
+      
+      # Audio Analysis API (optional - for vLLM-served Qwen2.5-Omni)
+      # When set and ANALYSIS_MODE=audio, uses API instead of local model
+      - AUDIO_ANALYSIS_API_URL=${AUDIO_ANALYSIS_API_URL:-}
+      
       # GPU
       - CUDA_VISIBLE_DEVICES=0
       
@@ -97,6 +104,50 @@ services:
     command: python -m src.worker.worker
     depends_on:
       - api
+      - transcription
+
+  # ----------------------------------------------------------------------------
+  # Transcription Service (Shared WhisperX)
+  # ----------------------------------------------------------------------------
+  # Runs WhisperX on GPU and exposes /internal/transcribe for workers.
+  # This allows multiple workers to share a single GPU-loaded model
+  # instead of each worker loading its own copy.
+  transcription:
+    build: .
+    container_name: angel-intelligence-transcription
+    ports:
+      - "8001:8001"
+    environment:
+      - ANGEL_ENV=development
+      - WORKER_ID=transcription-service
+      - WORKER_MODE=api
+      
+      # Transcription settings
+      - WHISPER_MODEL=${WHISPER_MODEL:-medium}
+      - TRANSCRIPT_SEGMENTATION=word
+      - HUGGINGFACE_TOKEN=${HUGGINGFACE_TOKEN:-}
+      
+      # GPU settings
+      - USE_GPU=true
+      - CUDA_VISIBLE_DEVICES=0
+      
+    volumes:
+      - ./models:/app/models:ro
+      - model-cache:/root/.cache
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    restart: unless-stopped
+    command: uvicorn src.api:app --host 0.0.0.0 --port 8001
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8001/internal/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
 
 volumes:
   model-cache:

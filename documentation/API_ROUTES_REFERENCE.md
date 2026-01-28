@@ -667,6 +667,38 @@ Internal health check for interactive workers.
 
 ---
 
+### `POST /internal/transcribe`
+Shared WhisperX transcription endpoint. Workers call this instead of loading their own model.
+
+**Request Body:**
+```json
+{
+  "audio_base64": "<base64-encoded-audio>",
+  "filename": "call.wav",
+  "diarize": true,
+  "language": "en",
+  "num_speakers": null
+}
+```
+
+**Response:**
+```json
+{
+  "text": "Hello, how can I help you today?",
+  "segments": [
+    {"start": 0.0, "end": 1.5, "text": "Hello,", "speaker": "SPEAKER_00"},
+    {"start": 1.5, "end": 3.2, "text": "how can I help you today?", "speaker": "SPEAKER_01"}
+  ],
+  "language": "en",
+  "duration": 3.2,
+  "word_count": 6,
+  "processing_time": 2.5,
+  "error": false
+}
+```
+
+---
+
 ## Error Responses
 
 All endpoints return standard error responses:
