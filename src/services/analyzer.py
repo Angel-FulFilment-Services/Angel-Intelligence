@@ -796,8 +796,8 @@ class AnalysisService:
         
         context_section = f"\n{prompt_context}\n" if prompt_context else ""
         
-        return f"""You are an expert call quality analyst for charity supporter engagement calls.
-Analyse this audio recording alongside its transcript.
+        return f"""You are an expert call quality analyst for charity fundraising and engagement.
+Analyse this audio recording alongside its transcript and provide detailed coaching insights.
 {context_section}
 CALL DURATION: {max_timestamp:.1f} seconds
 
@@ -1254,8 +1254,8 @@ TRANSCRIPT FOR THIS SEGMENT (use segment_ids for references):
 {chunk_transcript}
 """
         
-        system_prompt = f"""You are an expert call quality analyst for charity supporter engagement calls.
-Analyse this audio recording segment alongside its transcript.
+        system_prompt = f"""You are an expert call quality analyst for charity fundraising and engagement.
+Analyse this audio recording segment alongside its transcript and provide detailed coaching insights.
 {context_section}
 AUDIO SEGMENT: {chunk_start:.1f}s to {chunk_end:.1f}s
 {transcript_section}
@@ -1412,7 +1412,7 @@ Return ONLY valid JSON - no text before or after."""
         # Build context section (prompt_context already includes all four tiers' context including quality signals)
         context_section = f"\n\n{prompt_context}\n" if prompt_context else ""
         
-        return f"""You are an expert call quality analyst for charity supporter engagement calls.
+        return f"""You are an expert call quality analyst for charity fundraising and engagement.
 Analyse this transcript thoroughly and provide detailed coaching insights.
 {context_section}
 CALL DURATION: {max_timestamp:.1f} seconds

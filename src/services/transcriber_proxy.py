@@ -75,7 +75,8 @@ class TranscriptionProxy:
         audio_path: str,
         diarize: bool = True,
         language: Optional[str] = None,
-        num_speakers: Optional[int] = None
+        num_speakers: Optional[int] = None,
+        initial_prompt: Optional[str] = None
     ) -> TranscriptionResult:
         """
         Transcribe audio via shared service.
@@ -85,6 +86,8 @@ class TranscriptionProxy:
             diarize: Whether to perform speaker diarization
             language: Language code (auto-detect if None)
             num_speakers: Expected number of speakers (optional)
+            initial_prompt: Context prompt to condition the model (improves accuracy
+                for proper nouns, acronyms, and domain-specific vocabulary)
             
         Returns:
             TranscriptionResult with text, segments, and metadata
@@ -110,6 +113,8 @@ class TranscriptionProxy:
             request_data["language"] = language
         if num_speakers:
             request_data["num_speakers"] = num_speakers
+        if initial_prompt:
+            request_data["initial_prompt"] = initial_prompt
         
         logger.info(f"Sending transcription request to {self.base_url} for {audio_file.name}")
         

@@ -70,10 +70,21 @@ class EnquiryContext:
         
         lines.extend([
             "",
+            "CALL LOGGING VALIDATION RULES:",
+            "You MUST verify the logged call type matches the actual call outcome. Common mismatches include:",
+            "- If caller shows signs of vulnerability (confusion, distress, memory issues, age-related difficulties),",
+            "  the call MUST be logged as 'Vulnerable Person' regardless of other outcomes",
+            "- If caller is already a supporter/donor, should be 'Existing Supporter' not 'Not Interested'",
+            "- If caller wants to give online instead, should be 'Gone Online' or 'Referred Online'",
+            "- If call ended abruptly, consider 'Putdown' options",
+            "",
             "VALIDATION TASK:",
-            "Based on the call content, determine if the agent selected the correct call type.",
-            "If the logged call type does NOT match the call content, add a NEGATIVE score_impact",
-            "with category 'Call_logging' and explain which call type would have been more appropriate.",
+            "1. Identify what actually happened on the call (outcome, caller circumstances, any vulnerability indicators)",
+            "2. Compare against the logged call type shown above",
+            "3. If there is a MISMATCH, you MUST add a NEGATIVE score_impact with:",
+            "   - category: 'Call_logging'",
+            "   - Clear explanation of what was logged vs what should have been logged",
+            "   - Specify which call type from the available options would be correct",
         ])
         
         return "\n".join(lines)

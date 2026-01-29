@@ -31,8 +31,10 @@ from typing import Optional, Dict, Any
 # Add src to path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-from src.config import get_settings
-from src.database import CallRecording, CallTranscription, get_db_connection
+# Import directly to avoid loading torch-dependent modules from services/__init__.py
+from src.config.settings import get_settings
+from src.database.connection import get_db_connection
+from src.database.models import CallRecording, CallTranscription
 from src.services.config import get_config_service
 from src.services.enquiry_context import get_enquiry_context_service
 from src.services.order_context import get_order_context_service
@@ -320,7 +322,7 @@ class PromptTester:
         # Build context section
         context_section = f"\n\n{prompt_context}\n" if prompt_context else ""
         
-        return f"""You are an expert call quality analyst for charity supporter engagement calls.
+        return f"""You are an expert call quality analyst for charity fundraising and engagement.
 Analyse this transcript thoroughly and provide detailed coaching insights.
 {context_section}
 CALL DURATION: {max_timestamp:.1f} seconds

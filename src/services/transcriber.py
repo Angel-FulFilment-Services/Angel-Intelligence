@@ -123,7 +123,8 @@ class TranscriptionService:
         self, 
         audio_path: str, 
         language: str = "en",
-        diarize: bool = True
+        diarize: bool = True,
+        initial_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """
         Transcribe an audio file.
@@ -135,6 +136,8 @@ class TranscriptionService:
             audio_path: Path to audio file (WAV format preferred)
             language: Language code (default 'en' for English)
             diarize: Whether to perform speaker diarisation
+            initial_prompt: Context prompt to condition the model (improves accuracy
+                for proper nouns, acronyms, and domain-specific vocabulary)
             
         Returns:
             Dictionary containing:
@@ -146,18 +149,19 @@ class TranscriptionService:
         # Try proxy mode first if configured
         if self.service_url:
             try:
-                return self._transcribe_via_proxy(audio_path, language, diarize)
+                return self._transcribe_via_proxy(audio_path, language, diarize, initial_prompt)
             except Exception as e:
                 logger.warning(f"Proxy transcription failed, falling back to local: {e}")
         
         # Fall back to local transcription
-        return self._transcribe_local(audio_path, language, diarize)
+        return self._transcribe_local(audio_path, language, diarize, initial_prompt)
     
     def _transcribe_via_proxy(
         self,
         audio_path: str,
         language: str = "en",
-        diarize: bool = True
+        diarize: bool = True,
+        initial_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """Transcribe via the shared transcription service."""
         import asyncio
@@ -167,6 +171,8 @@ class TranscriptionService:
             raise RuntimeError("Transcription proxy not available")
         
         logger.info(f"Transcribing via proxy: {audio_path}")
+        if initial_prompt:
+            logger.debug(f"Using initial prompt: {initial_prompt[:100]}...")
         
         # Run async proxy call in sync context
         loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else asyncio.new_event_loop()
@@ -176,6 +182,7 @@ class TranscriptionService:
                 audio_path=audio_path,
                 diarize=diarize,
                 language=language if language != "auto" else None,
+                initial_prompt=initial_prompt,
             )
             return result
         
@@ -212,24 +219,30 @@ class TranscriptionService:
         self, 
         audio_path: str, 
         language: str = "en",
-        diarize: bool = True
+        diarize: bool = True,
+        initial_prompt: Optional[str] = None
     ) -> Dict[str, Any]:
         """Transcribe locally using in-memory WhisperX model."""
         self._ensure_model_loaded()
         
         start_time = time.time()
         logger.info(f"Starting local transcription: {audio_path}")
+        if initial_prompt:
+            logger.debug(f"Using initial prompt: {initial_prompt[:100]}...")
         
         try:
             # Load audio
             audio = whisperx.load_audio(audio_path)
             
-            # Transcribe
-            result = self._whisper_model.transcribe(
-                audio,
-                batch_size=self.batch_size,
-                language=language if language != "auto" else None
-            )
+            # Transcribe with optional initial prompt for context
+            transcribe_options = {
+                "batch_size": self.batch_size,
+                "language": language if language != "auto" else None,
+            }
+            if initial_prompt:
+                transcribe_options["initial_prompt"] = initial_prompt
+            
+            result = self._whisper_model.transcribe(audio, **transcribe_options)
             
             detected_language = result.get("language", language)
             logger.info(f"Transcription complete, language: {detected_language}")

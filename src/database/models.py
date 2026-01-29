@@ -115,6 +115,7 @@ class CallRecording:
     enqref: Optional[str] = None              # Enquiry reference number
     obref: Optional[str] = None               # Outbound reference number
     client_ref: Optional[str] = None          # Client reference code
+    client_name: Optional[str] = None         # Client display name
     ddi: Optional[str] = None                 # DDI (phone number) for calltype group lookup
     campaign: Optional[str] = None            # Campaign name
     campaign_type: Optional[str] = None       # Campaign type for config lookup
@@ -150,6 +151,7 @@ class CallRecording:
             enqref=row.get("enqref"),
             obref=row.get("obref"),
             client_ref=row.get("client_ref"),
+            client_name=row.get("client_name"),
             ddi=row.get("ddi"),
             campaign=row.get("campaign"),
             campaign_type=row.get("campaign_type"),
