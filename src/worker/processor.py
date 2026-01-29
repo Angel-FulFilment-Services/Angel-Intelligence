@@ -22,11 +22,11 @@ from src.config import get_settings
 from src.database import CallRecording, CallTranscription, CallAnalysis, ClientConfig
 from src.services import (
     AudioDownloader, 
-    TranscriptionService, 
     PIIDetector, 
     get_analysis_service,
     VoiceFingerprintService,
 )
+from src.services.transcriber import TranscriptionService
 
 logger = logging.getLogger(__name__)
 
@@ -152,8 +152,8 @@ class CallProcessor:
                 # Step 1: Download and convert audio
                 audio_path, is_local_file = self._download_audio(recording)
                 
-                # Step 2: Transcribe
-                transcript_result = self._transcribe(audio_path)
+                # Step 2: Transcribe (with context for better accuracy)
+                transcript_result = self._transcribe(audio_path, recording)
                 
                 # Step 3: Identify speakers using voice fingerprinting
                 transcript_result = self._identify_speakers(
@@ -280,8 +280,10 @@ class CallProcessor:
             r2_bucket=recording.r2_bucket
         )
     
-    def _transcribe(self, audio_path: str) -> dict:
-        """Transcribe audio file."""
+    def _transcribe(self, audio_path: str, recording: CallRecording) -> dict:
+        """
+        Transcribe audio file.
+        """
         logger.info(f"Transcribing audio: {audio_path}")
         
         result = self.transcriber.transcribe(
@@ -482,7 +484,8 @@ class CallProcessor:
             redacted_transcript=redacted_transcript,
             pii_detected=pii_detected,
             language_detected=transcript.get("language_detected", "en"),
-            confidence_score=transcript.get("confidence", 0.95),
+            # Clamp confidence to valid range 0.0-1.0 (NeMo may return log-probs or percentages)
+            confidence_score=max(0.0, min(1.0, float(transcript.get("confidence", 0.95)))),
             model_used=transcript.get("model_used", "whisperx-medium"),
             processing_time_seconds=int(transcript.get("processing_time", 0)),
         )
