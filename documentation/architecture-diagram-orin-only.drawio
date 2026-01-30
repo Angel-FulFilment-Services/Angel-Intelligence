@@ -1,0 +1,172 @@
+<mxfile host="65bd71144e">
+    <diagram id="orin-only-architecture" name="Orin Only Architecture">
+        <mxGraphModel dx="1048" dy="933" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1600" pageHeight="1200" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="ANGEL INTELLIGENCE - ORIN-ONLY ARCHITECTURE" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1;fontColor=#1a1a2e;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="20" width="800" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="subtitle" value="Single Node Configuration - No Thor | Throughput: ~72 calls/hr" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="60" width="800" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="gateway-container" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f4f8;strokeColor=#0077b6;strokeWidth=3;dashed=0;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="100" width="360" height="500" as="geometry"/>
+                </mxCell>
+                <mxCell id="gateway-title" value="GATEWAY NODE&#xa;(x86_64 - No GPU)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1;fontColor=#0077b6;" parent="1" vertex="1">
+                    <mxGeometry x="100" y="110" width="240" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="api-pod" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#4895ef;strokeColor=#023e8a;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="160" width="320" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="api-title" value="API POD" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="180" y="165" width="80" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="fastapi" value="FastAPI&#xa;(routes.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#023e8a;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="190" width="90" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="auth" value="Auth&#xa;(auth.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#023e8a;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="170" y="190" width="90" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="config" value="Config&#xa;(settings.py)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#023e8a;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="270" y="190" width="90" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="api-redis" value="→ Redis Queue" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="70" y="240" width="100" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="api-postgres" value="→ MySQL" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="170" y="240" width="100" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="redis-pod" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e63946;strokeColor=#9d0208;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="300" width="140" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="redis-title" value="REDIS POD" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="80" y="305" width="100" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="redis-rq" value="RQ Queue&#xa;Job Storage" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9d0208;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="75" y="330" width="110" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="mysql-connector" value="→ MySQL Server&#xa;(External)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#2a9d8f;strokeColor=#1d6f64;strokeWidth=2;fontSize=10;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="220" y="300" width="160" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="storage-pod" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#6c757d;strokeColor=#495057;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="400" width="320" height="80" as="geometry"/>
+                </mxCell>
+                <mxCell id="storage-title" value="MODEL STORAGE (NFS/PVC)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="130" y="405" width="180" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="storage-models" value="/models/qwen2.5-72b-awq&#xa;/models/whisperx-large-v3&#xa;/lora-adapters/*" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#495057;fontSize=10;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="75" y="430" width="290" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="ingress" value="INGRESS&#xa;:443 → API" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f77f00;strokeColor=#d62828;strokeWidth=2;fontSize=11;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="500" width="320" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="orin-container" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e6f7e6;strokeColor=#2d6a4f;strokeWidth=3;dashed=0;" parent="1" vertex="1">
+                    <mxGeometry x="440" y="100" width="720" height="670" as="geometry"/>
+                </mxCell>
+                <mxCell id="orin-title" value="NVIDIA ORIN AGX NODE&#xa;(ARM64 - 64GB) | ~72 calls/hr" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1;fontColor=#2d6a4f;" parent="1" vertex="1">
+                    <mxGeometry x="660" y="110" width="280" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-service" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#9d4edd;strokeColor=#5a189a;strokeWidth=3;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="160" width="680" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-service-title" value="vLLM SERVICE (1 Pod) | ~180 calls/hr capacity" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=14;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="643" y="164" width="340" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#7b2cbf;strokeColor=#5a189a;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="200" width="640" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-1-title" value="vLLM INSTANCE 1 | ~40GB" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="725" y="205" width="150" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-1-model" value="Qwen2.5-72B-AWQ (Q4) | GPU: Orin iGPU (unified memory)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#5a189a;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="230" width="600" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-1-info" value=":30800 OpenAI API | LoRA Adapters (call-optimized, compliance, sentiment)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="600" y="265" width="400" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcription-service" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#06d6a0;strokeColor=#028a63;strokeWidth=3;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="330" width="680" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcription-service-title" value="TRANSCRIPTION SERVICE (1 Pod) | ~72 calls/hr capacity [BOTTLENECK]" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=13;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="543" y="334" width="520" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcription-1" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#02ad82;strokeColor=#028a63;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="370" width="640" height="95" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcription-1-title" value="TRANSCRIPTION POD 1 | ~10GB" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="725" y="375" width="150" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcription-1-model" value="WhisperX large-v3 | GPU: Orin iGPU (shared with vLLM via unified memory)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#028a63;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="400" width="600" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcription-1-info" value=":30700 | ~72 calls/hr per pod" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="725" y="435" width="150" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="workers-service" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#118ab2;strokeColor=#073b4c;strokeWidth=3;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="500" width="330" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="workers-service-title" value="BATCH WORKERS (4 Workers) | ~2GB" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="525" y="505" width="200" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="workers-info" value="HTTP Orchestrators (~0.5GB each)&#xa;Call local Transcription :30700&#xa;Call local vLLM :30800&#xa;Process PII Detection&#xa;Redis Queue Communication" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#073b4c;fontSize=10;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="480" y="540" width="290" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="interactive-workers" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ef476f;strokeColor=#9d0208;strokeWidth=3;" parent="1" vertex="1">
+                    <mxGeometry x="810" y="500" width="330" height="130" as="geometry"/>
+                </mxCell>
+                <mxCell id="interactive-workers-title" value="INTERACTIVE WORKERS (2 Workers) | ~1GB" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="850" y="505" width="250" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="interactive-workers-info" value="HTTP Orchestrators (~0.5GB each)&#xa;Real-time WebSocket support&#xa;SQL Agent integration&#xa;Call local services&#xa;Immediate response handling" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9d0208;fontSize=10;align=left;" parent="1" vertex="1">
+                    <mxGeometry x="830" y="540" width="290" height="75" as="geometry"/>
+                </mxCell>
+                <mxCell id="training-pod" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffd166;strokeColor=#f77f00;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="650" width="680" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="training-title" value="TRAINING CRONJOB (Nightly @ 2AM)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=1;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="660" y="655" width="280" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="training-info" value="LoRA Fine-tuning → Updates /lora-adapters/ → vLLM Hot-Reload" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="560" y="680" width="480" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="mysql-server" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#2a9d8f;strokeColor=#1d6f64;strokeWidth=3;" parent="1" vertex="1">
+                    <mxGeometry x="1200" y="400" width="180" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="mysql-server-title" value="MYSQL SERVER&#xa;(Separate Host)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="1210" y="410" width="160" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="mysql-server-info" value="Recordings, Analysis&#xa;Sessions, Config&#xa;mysql://db-host:3306" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#1d6f64;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="1210" y="445" width="160" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="memory-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f8f9fa;strokeColor=#6c757d;strokeWidth=2;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="1200" y="100" width="180" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="memory-title" value="ORIN MEMORY&#xa;(64GB Total)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="1210" y="105" width="160" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="memory-vllm1" value="vLLM 1: ~40GB" style="text;html=1;strokeColor=none;fillColor=#9d4edd;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontSize=10;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="1210" y="140" width="160" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="memory-whisper" value="Transcription 1x: ~10GB" style="text;html=1;strokeColor=none;fillColor=#06d6a0;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontSize=10;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="1210" y="165" width="160" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="memory-workers" value="Workers 6x: ~3GB" style="text;html=1;strokeColor=none;fillColor=#118ab2;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontSize=10;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="1210" y="190" width="160" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="memory-overhead" value="API/Redis/System: ~4GB" style="text;html=1;strokeColor=none;fillColor=#4895ef;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontSize=10;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="1210" y="215" width="160" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="memory-free" value="Headroom: ~7GB" style="text;html=1;strokeColor=none;fillColor=#52b788;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=1;fontSize=10;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="1210" y="240" width="160" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-gateway-orin" value="" style="endArrow=classic;startArrow=classic;html=1;rounded=0;strokeColor=#2d6a4f;strokeWidth=3;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="400" y="350" as="sourcePoint"/>
+                        <mxPoint x="440" y="350" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

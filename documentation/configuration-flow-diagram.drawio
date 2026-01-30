@@ -1,0 +1,155 @@
+<mxfile host="65bd71144e">
+    <diagram id="config-flow" name="Configuration Flow">
+        <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="ANGEL INTELLIGENCE - CONFIGURATION FLOW" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1;fontColor=#1a1a2e;" parent="1" vertex="1">
+                    <mxGeometry x="350" y="20" width="700" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="subtitle" value="How call_analysis_config.json drives the LLM analysis behavior" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="350" y="55" width="700" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-file" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e3f2fd;strokeColor=#1565c0;strokeWidth=3;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="100" width="300" height="680" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-title" value="call_analysis_config.json" style="text;html=1;strokeColor=none;fillColor=#1565c0;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="100" width="300" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-topics" value="topics[] (14 topics)&#xa;&#xa;• call_opening&#xa;• gift_aid_ask&#xa;• direct_debit&#xa;• payment_confirmation&#xa;• vulnerability_check&#xa;• security_verification&#xa;• objection_handling&#xa;• upsell_attempt&#xa;• closing&#xa;• rapport_building&#xa;• data_protection&#xa;• call_transfer&#xa;• complaint_handling&#xa;• callback_scheduling" style="text;html=1;strokeColor=none;fillColor=#bbdefb;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="135" width="135" height="200" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-actions" value="agent_actions[] (12 actions)&#xa;&#xa;• verified_identity&#xa;• explained_purpose&#xa;• asked_gift_aid&#xa;• confirmed_dd_details&#xa;• handled_objection&#xa;• offered_upsell&#xa;• checked_vulnerability&#xa;• read_script&#xa;• built_rapport&#xa;• provided_reference&#xa;• scheduled_callback&#xa;• transferred_correctly" style="text;html=1;strokeColor=none;fillColor=#bbdefb;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="195" y="135" width="135" height="200" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-rubric" value="performance_rubric[]&#xa;&#xa;Each item defines:&#xa;• name: rubric identifier&#xa;• description: what to evaluate&#xa;• scoring_criteria: how to score&#xa;• max_impact: quality % change&#xa;&#xa;Examples:&#xa;• call_opening: +5% max&#xa;• objection_handling: +10% max&#xa;• vulnerability_check: +15% max&#xa;• gift_aid_conversion: +8% max" style="text;html=1;strokeColor=none;fillColor=#90caf9;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="345" width="280" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-signals" value="quality_signals{}&#xa;&#xa;universal_quality:&#xa;  • clarity, empathy, professionalism&#xa;  • pacing, tone, active_listening&#xa;&#xa;gift_aid:&#xa;  • eligibility_check, explanation_quality&#xa;  • soft_close_technique&#xa;&#xa;vulnerability_capacity:&#xa;  tier_1: mild_stress, fatigue&#xa;  tier_2: financial_concern, health_issue&#xa;  tier_3: severe_distress, capacity_doubt" style="text;html=1;strokeColor=none;fillColor=#64b5f6;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="515" width="280" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-extras" value="Also includes:&#xa;• howlers[] - critical failures&#xa;• objection_handling[] - techniques&#xa;• objection_library[] - known objections&#xa;• rapport_cues[] - positive behaviors" style="text;html=1;strokeColor=none;fillColor=#e3f2fd;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="680" width="280" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-config-prompt" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#1565c0;strokeWidth=3;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="340" y="440" as="sourcePoint"/>
+                        <mxPoint x="400" y="440" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-label1" value="Loaded at&#xa;runtime" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#1565c0;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="345" y="400" width="50" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="prompt-builder" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#ef6c00;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="100" width="280" height="320" as="geometry"/>
+                </mxCell>
+                <mxCell id="prompt-title" value="analyzer.py _build_prompt()" style="text;html=1;strokeColor=none;fillColor=#ef6c00;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="100" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="prompt-content" value="Constructs LLM prompt dynamically:&#xa;&#xa;1. System Message:&#xa;   &quot;You are an expert call analyst...&quot;&#xa;   + List of topics to detect&#xa;   + List of agent_actions to find&#xa;   + Performance rubric descriptions&#xa;   + Quality signal definitions&#xa;   + Vulnerability tier mappings&#xa;&#xa;2. User Message:&#xa;   &quot;Analyze this transcript:&quot;&#xa;   + Full transcript with segment_ids&#xa;   + Speaker labels (AGENT/CALLER)&#xa;   + Timestamps per segment&#xa;&#xa;3. Response Format:&#xa;   &quot;Return JSON with:&quot;&#xa;   + summary, sentiment, topics[]&#xa;   + agent_actions[], score_impacts[]&#xa;   + vulnerability_tier, compliance[]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="410" y="135" width="260" height="270" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcript-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="440" width="280" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcript-title" value="Transcript Input" style="text;html=1;strokeColor=none;fillColor=#2e7d32;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="440" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcript-content" value="From TranscriptionService:&#xa;&#xa;segments: [&#xa;  {&#xa;    segment_id: &quot;abc-123-...&quot;,&#xa;    speaker: &quot;AGENT&quot;,&#xa;    start: 0.0, end: 3.5,&#xa;    text: &quot;Good morning, this is...&quot;&#xa;  },&#xa;  ...&#xa;]" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;fontFamily=Courier New;" parent="1" vertex="1">
+                    <mxGeometry x="410" y="475" width="260" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-to-llm" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#ef6c00;strokeWidth=3;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="680" y="260" as="sourcePoint"/>
+                        <mxPoint x="740" y="260" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-transcript-llm" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#2e7d32;strokeWidth=2;dashed=1;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="680" y="520" as="sourcePoint"/>
+                        <mxPoint x="740" y="320" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="710" y="520"/>
+                            <mxPoint x="710" y="320"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="llm-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f3e5f5;strokeColor=#7b1fa2;strokeWidth=3;" parent="1" vertex="1">
+                    <mxGeometry x="740" y="100" width="200" height="300" as="geometry"/>
+                </mxCell>
+                <mxCell id="llm-title" value="vLLM :30800" style="text;html=1;strokeColor=none;fillColor=#7b1fa2;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="740" y="100" width="200" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="llm-content" value="Qwen2.5-72B-AWQ&#xa;&#xa;/v1/chat/completions&#xa;&#xa;Receives:&#xa;• Structured prompt with&#xa;  all config embedded&#xa;• Full transcript&#xa;• Response format spec&#xa;&#xa;Returns:&#xa;• JSON following the&#xa;  schema defined in prompt&#xa;• Uses segment_ids to&#xa;  reference specific parts&#xa;• Scores based on rubric" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="750" y="135" width="180" height="250" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-to-output" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#7b1fa2;strokeWidth=3;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="940" y="250" as="sourcePoint"/>
+                        <mxPoint x="1000" y="250" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="output-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fce4ec;strokeColor=#c2185b;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="100" width="340" height="400" as="geometry"/>
+                </mxCell>
+                <mxCell id="output-title" value="CallAnalysis Output" style="text;html=1;strokeColor=none;fillColor=#c2185b;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="1000" y="100" width="340" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="output-content" value="{&#xa;  summary: &quot;Agent handled...&quot;,&#xa;  sentiment_score: 0.72,&#xa;  sentiment_label: &quot;positive&quot;,&#xa;&#xa;  key_topics: [&#xa;    {&#xa;      topic: &quot;gift_aid_ask&quot;,&#xa;      segment_ids: [&quot;abc-123&quot;, &quot;def-456&quot;],&#xa;      confidence: 0.95&#xa;    }&#xa;  ],&#xa;&#xa;  agent_actions: [&#xa;    {&#xa;      action: &quot;asked_gift_aid&quot;,&#xa;      segment_ids: [&quot;ghi-789&quot;],&#xa;      performed: true&#xa;    }&#xa;  ],&#xa;&#xa;  score_impacts: [&#xa;    {&#xa;      rubric: &quot;gift_aid_conversion&quot;,&#xa;      impact: +8,&#xa;      reason: &quot;Successfully...&quot;,&#xa;      segment_ids: [&quot;abc-123&quot;]&#xa;    }&#xa;  ],&#xa;&#xa;  vulnerability_tier: &quot;tier_1&quot;,&#xa;  vulnerability_reason: &quot;Mild stress...&quot;&#xa;}" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;fontFamily=Courier New;" parent="1" vertex="1">
+                    <mxGeometry x="1010" y="135" width="320" height="350" as="geometry"/>
+                </mxCell>
+                <mxCell id="quality-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff8e6;strokeColor=#ffc107;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="740" y="440" width="600" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="quality-title" value="QUALITY SCORE CALCULATION" style="text;html=1;strokeColor=none;fillColor=#ffc107;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="740" y="440" width="250" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="quality-content" value="Base Score: 65%&#xa;&#xa;For each score_impact from LLM:&#xa;  if impact &gt; 0:&#xa;    # Diminishing returns for positives&#xa;    actual = impact * (1 - current_bonus * 0.02)&#xa;  else:&#xa;    # Linear penalty for negatives&#xa;    actual = impact&#xa;&#xa;final_score = base + sum(all_impacts)&#xa;Clamped to 0-100" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;fontFamily=Courier New;" parent="1" vertex="1">
+                    <mxGeometry x="750" y="475" width="240" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="quality-zones" value="Quality Zones:&#xa;&#xa;• 0-35%: RED (critical)&#xa;• 36-64%: AMBER (needs improvement)&#xa;• 65-79%: GREEN (acceptable)&#xa;• 80-89%: SILVER (good)&#xa;• 90-100%: GOLD (excellent)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="1010" y="475" width="160" height="115" as="geometry"/>
+                </mxCell>
+                <mxCell id="quality-example" value="Example:&#xa;Base 65%&#xa;+8% gift aid ✓&#xa;+5% opening ✓&#xa;-15% howler ✗&#xa;= 63% AMBER" style="text;html=1;strokeColor=none;fillColor=#ffecb3;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="1190" y="475" width="140" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="client-config-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#43a047;strokeWidth=2;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="620" width="280" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="client-config-title" value="Client-Specific Overrides (ai_client_config)" style="text;html=1;strokeColor=none;fillColor=#43a047;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="620" width="280" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="client-config-content" value="Per-client configuration stored in MySQL:&#xa;&#xa;• Additional topics specific to client&#xa;• Custom rubric weightings&#xa;• Compliance requirements&#xa;• Vocabulary/terminology overrides&#xa;• Default vulnerability handling&#xa;&#xa;Loaded in processor.py _load_client_config()&#xa;Merged with base config before prompt build" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="410" y="655" width="260" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-client-merge" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#43a047;strokeWidth=2;dashed=1;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="540" y="620" as="sourcePoint"/>
+                        <mxPoint x="540" y="420" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-merge-label" value="Merged at&#xa;runtime" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#43a047;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="550" y="510" width="60" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="env-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ede7f6;strokeColor=#673ab7;strokeWidth=2;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="740" y="620" width="260" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="env-title" value="Environment Variables" style="text;html=1;strokeColor=none;fillColor=#673ab7;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="740" y="620" width="260" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="env-content" value="From K8s ConfigMap/Secret:&#xa;&#xa;• VLLM_API_URL=http://...:30800&#xa;• VLLM_MODEL=Qwen2.5-72B-AWQ&#xa;• ANALYSIS_CONFIG_PATH=/app/config.json&#xa;• DB_HOST, DB_USER, DB_PASSWORD&#xa;• R2_BUCKET, R2_ACCESS_KEY&#xa;• LOG_LEVEL, POLL_INTERVAL" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;fontFamily=Courier New;" parent="1" vertex="1">
+                    <mxGeometry x="750" y="655" width="240" height="120" as="geometry"/>
+                </mxCell>
+                <mxCell id="settings-box" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#9e9e9e;strokeWidth=2;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="1020" y="620" width="320" height="160" as="geometry"/>
+                </mxCell>
+                <mxCell id="settings-title" value="src/config/settings.py" style="text;html=1;strokeColor=none;fillColor=#9e9e9e;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="1020" y="620" width="320" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="settings-content" value="Pydantic settings model:&#xa;&#xa;class Settings(BaseSettings):&#xa;    vllm_api_url: str&#xa;    vllm_model: str = &quot;Qwen2.5-72B-AWQ&quot;&#xa;    db_host: str&#xa;    db_name: str = &quot;ai&quot;&#xa;    poll_interval: int = 10&#xa;    max_retries: int = 3&#xa;    ...&#xa;&#xa;Validates and loads from environment" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;fontFamily=Courier New;" parent="1" vertex="1">
+                    <mxGeometry x="1030" y="655" width="300" height="120" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

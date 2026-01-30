@@ -1,0 +1,210 @@
+<mxfile host="65bd71144e">
+    <diagram id="network-topology" name="Network Topology">
+        <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="900" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="ANGEL INTELLIGENCE - NETWORK TOPOLOGY" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1;fontColor=#1a1a2e;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="20" width="600" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="subtitle" value="Physical and logical network connections between Angel Intelligence infrastructure components" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="55" width="800" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="external-zone" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffebee;strokeColor=#c62828;strokeWidth=2;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="90" width="300" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="external-title" value="EXTERNAL NETWORK" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#c62828;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="95" width="150" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="web-dashboard" value="Web Dashboard&#xa;(Bubble.io)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#c62828;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="130" width="120" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="r2-storage" value="Cloudflare R2&#xa;(Audio Storage)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#c62828;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="200" y="130" width="120" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="pbx" value="3CX PBX&#xa;(Call Recordings)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#c62828;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="60" y="200" width="120" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="mysql-external" value="MySQL Server&#xa;(External)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#ef6c00;strokeWidth=2;fontSize=10;" parent="1" vertex="1">
+                    <mxGeometry x="200" y="200" width="120" height="50" as="geometry"/>
+                </mxCell>
+                <mxCell id="firewall" value="FIREWALL / LOAD BALANCER" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#333333;strokeColor=#333333;fontColor=#ffffff;fontSize=10;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="360" y="160" width="50" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-ext-fw1" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#c62828;strokeWidth=2;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="180" y="155" as="sourcePoint"/>
+                        <mxPoint x="360" y="180" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-ext-fw2" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#c62828;strokeWidth=2;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="320" y="155" as="sourcePoint"/>
+                        <mxPoint x="360" y="190" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-ext-fw3" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#ef6c00;strokeWidth=2;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="320" y="225" as="sourcePoint"/>
+                        <mxPoint x="360" y="225" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="k8s-cluster" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e3f2fd;strokeColor=#1565c0;strokeWidth=3;" parent="1" vertex="1">
+                    <mxGeometry x="430" y="90" width="530" height="380" as="geometry"/>
+                </mxCell>
+                <mxCell id="k8s-title" value="KUBERNETES CLUSTER (k3s)" style="text;html=1;strokeColor=none;fillColor=#1565c0;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="430" y="90" width="250" height="25" as="geometry"/>
+                </mxCell>
+                <mxCell id="gateway-node" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#bbdefb;strokeColor=#1565c0;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="130" width="200" height="320" as="geometry"/>
+                </mxCell>
+                <mxCell id="gateway-title" value="GATEWAY NODE" style="text;html=1;strokeColor=none;fillColor=#1565c0;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="130" width="200" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="gateway-specs" value="x86 Server&#xa;CPU: 32 cores&#xa;RAM: 64GB&#xa;Network: 10Gbps" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=8;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="155" width="80" height="60" as="geometry"/>
+                </mxCell>
+                <mxCell id="nginx-ingress" value="NGINX Ingress&#xa;:80, :443" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#43a047;strokeWidth=2;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="220" width="90" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="api-pod" value="API Pod&#xa;:8000" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#7b1fa2;strokeWidth=2;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="555" y="220" width="85" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="metrics" value="Metrics&#xa;:9090" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9e9e9e;strokeWidth=1;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="270" width="90" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="traefik" value="Traefik&#xa;Dashboard" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9e9e9e;strokeWidth=1;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="555" y="270" width="85" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="worker-gw" value="Batch Worker&#xa;(optional)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ef6c00;strokeWidth=1;fontSize=9;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="315" width="180" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="k8s-services" value="K8s Services:&#xa;• ClusterIP: internal pods&#xa;• NodePort: :30800 (vLLM)&#xa;• LoadBalancer: :80/:443" style="text;html=1;strokeColor=none;fillColor=#e3f2fd;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=8;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="460" y="360" width="180" height="55" as="geometry"/>
+                </mxCell>
+                <mxCell id="thor-node" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="670" y="130" width="140" height="170" as="geometry"/>
+                </mxCell>
+                <mxCell id="thor-title" value="THOR (AGX)" style="text;html=1;strokeColor=none;fillColor=#2e7d32;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="670" y="130" width="140" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="thor-specs" value="Jetson AGX Thor&#xa;GPU: 128GB unified&#xa;Network: 10Gbps" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=8;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="680" y="155" width="120" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-1" value="vLLM Pod 1&#xa;:30800" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9d4edd;strokeWidth=2;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="680" y="200" width="120" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="vllm-2" value="vLLM Pod 2&#xa;:30801" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#9d4edd;strokeWidth=2;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="680" y="240" width="120" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="thor-worker" value="Transcription x3&#xa;Workers x15" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ef6c00;strokeWidth=2;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="680" y="280" width="120" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="orin-node" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#ef6c00;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="830" y="130" width="120" height="170" as="geometry"/>
+                </mxCell>
+                <mxCell id="orin-title" value="ORIN NODES" style="text;html=1;strokeColor=none;fillColor=#ef6c00;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="830" y="130" width="120" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="orin-specs" value="Jetson Orin x3&#xa;GPU: 64GB each&#xa;Network: 10Gbps" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=8;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="155" width="100" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="orin-worker-1" value="Workers x20+" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ef6c00;strokeWidth=2;fontSize=9;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="200" width="100" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="orin-worker-2" value="(~1GB each)" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ef6c00;strokeWidth=1;fontSize=8;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="235" width="100" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="orin-worker-3" value="HTTP → Thor" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#ffffff;strokeColor=#ef6c00;strokeWidth=1;fontSize=8;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="840" y="270" width="100" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="internal-network" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#f5f5f5;strokeColor=#9e9e9e;strokeWidth=2;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="450" y="420" width="500" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="internal-net-title" value="K8s Internal Network (Flannel CNI) - Pod-to-Pod Communication" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="430" width="400" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="arrow-fw-ingress" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#43a047;strokeWidth=2;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="410" y="200" as="sourcePoint"/>
+                        <mxPoint x="460" y="240" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-ingress-api" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#7b1fa2;strokeWidth=2;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="550" y="240" as="sourcePoint"/>
+                        <mxPoint x="555" y="240" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-gw-thor" value="" style="endArrow=classic;startArrow=classic;html=1;rounded=0;strokeColor=#2e7d32;strokeWidth=2;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="650" y="290" as="sourcePoint"/>
+                        <mxPoint x="670" y="290" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="arrow-thor-orin" value="" style="endArrow=classic;startArrow=classic;html=1;rounded=0;strokeColor=#ef6c00;strokeWidth=2;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="810" y="250" as="sourcePoint"/>
+                        <mxPoint x="830" y="250" as="targetPoint"/>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="port-legend" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#333333;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="490" width="350" height="290" as="geometry"/>
+                </mxCell>
+                <mxCell id="port-legend-title" value="PORT MAPPINGS" style="text;html=1;strokeColor=none;fillColor=#333333;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="490" width="150" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="port-list" value="External Ports:&#xa;  :80    → NGINX Ingress (HTTP)&#xa;  :443   → NGINX Ingress (HTTPS)&#xa;  :3306  → MySQL (External Server)&#xa;&#xa;NodePort Services:&#xa;  :30800 → vLLM API (Thor Pod 1)&#xa;  :30801 → vLLM API (Thor Pod 2)&#xa;  :30080 → API Service (if exposed)&#xa;&#xa;ClusterIP Services (internal only):&#xa;  :8000  → API Pod&#xa;  :9090  → Prometheus Metrics&#xa;  :8080  → Traefik Dashboard&#xa;&#xa;Worker Ports (internal):&#xa;  N/A    → Workers poll DB, no inbound" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;fontFamily=Courier New;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="520" width="330" height="250" as="geometry"/>
+                </mxCell>
+                <mxCell id="traffic-legend" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#333333;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="410" y="490" width="280" height="290" as="geometry"/>
+                </mxCell>
+                <mxCell id="traffic-legend-title" value="TRAFFIC FLOWS" style="text;html=1;strokeColor=none;fillColor=#333333;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="410" y="490" width="140" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="traffic-flows" value="1. API Requests (rare):&#xa;   Dashboard → :443 → Ingress → API Pod&#xa;&#xa;2. Worker Batch Processing:&#xa;   Worker → MySQL :3306 (poll)&#xa;   Worker → R2 (download audio)&#xa;   Worker → Transcription :30900 (Thor)&#xa;   Worker → vLLM :30800 (Thor)&#xa;   Worker → MySQL :3306 (save)&#xa;&#xa;3. Orin → Thor Services:&#xa;   Transcription: HTTP :30900&#xa;   LLM: HTTP :30800&#xa;   K8s Service load balancing&#xa;&#xa;4. Throughput: ~150-200 calls/hr&#xa;   (3 transcription + 2 vLLM pods)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;fontFamily=Courier New;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="520" width="260" height="250" as="geometry"/>
+                </mxCell>
+                <mxCell id="security-legend" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#333333;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="490" width="280" height="290" as="geometry"/>
+                </mxCell>
+                <mxCell id="security-legend-title" value="SECURITY ZONES" style="text;html=1;strokeColor=none;fillColor=#333333;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=11;fontStyle=1;fontColor=#ffffff;" parent="1" vertex="1">
+                    <mxGeometry x="710" y="490" width="150" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="security-content" value="Zone 1 - External (Red):&#xa;  • Public internet access&#xa;  • TLS required for all traffic&#xa;  • Rate limiting at ingress&#xa;  • API key authentication&#xa;&#xa;Zone 2 - DMZ (Firewall):&#xa;  • Ingress controller&#xa;  • SSL termination&#xa;  • Request filtering&#xa;&#xa;Zone 3 - Internal (Blue/Green):&#xa;  • K8s cluster network&#xa;  • Pod-to-pod mTLS (optional)&#xa;  • Secrets in K8s Secrets&#xa;  • No direct external access&#xa;&#xa;Zone 4 - Database (Orange):&#xa;  • MySQL on dedicated server&#xa;  • Accessed via hostAliases&#xa;  • Credentials in K8s Secrets" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="720" y="520" width="260" height="250" as="geometry"/>
+                </mxCell>
+                <mxCell id="db-arrow" value="" style="endArrow=classic;startArrow=classic;html=1;rounded=0;strokeColor=#ef6c00;strokeWidth=2;dashed=1;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="550" y="420" as="sourcePoint"/>
+                        <mxPoint x="320" y="250" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="550" y="390"/>
+                            <mxPoint x="380" y="390"/>
+                            <mxPoint x="380" y="250"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="db-arrow-label" value="MySQL :3306" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=8;fontColor=#ef6c00;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="340" y="300" width="70" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="r2-arrow" value="" style="endArrow=classic;html=1;rounded=0;strokeColor=#c62828;strokeWidth=2;dashed=1;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="550" y="350" as="sourcePoint"/>
+                        <mxPoint x="260" y="180" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="550" y="350"/>
+                            <mxPoint x="390" y="350"/>
+                            <mxPoint x="390" y="110"/>
+                            <mxPoint x="260" y="110"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="r2-arrow-label" value="R2 HTTPS" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=8;fontColor=#c62828;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="300" y="95" width="60" height="20" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

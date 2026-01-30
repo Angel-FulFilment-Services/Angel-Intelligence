@@ -1,0 +1,146 @@
+<mxfile host="65bd71144e">
+    <diagram id="database-schema" name="Database Schema (ER Diagram)">
+        <mxGraphModel dx="1400" dy="900" grid="1" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="1" pageScale="1" pageWidth="1400" pageHeight="1000" math="0" shadow="0">
+            <root>
+                <mxCell id="0"/>
+                <mxCell id="1" parent="0"/>
+                <mxCell id="title" value="ANGEL INTELLIGENCE - DATABASE SCHEMA (MySQL)" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=24;fontStyle=1;fontColor=#1a1a2e;" parent="1" vertex="1">
+                    <mxGeometry x="400" y="20" width="600" height="40" as="geometry"/>
+                </mxCell>
+                <mxCell id="subtitle" value="Database: 'ai' | All tables prefixed with 'ai_'" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontColor=#666666;" parent="1" vertex="1">
+                    <mxGeometry x="500" y="55" width="400" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="recordings-table" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e3f2fd;strokeColor=#1565c0;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="100" width="320" height="480" as="geometry"/>
+                </mxCell>
+                <mxCell id="recordings-header" value="ai_call_recordings" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#1565c0;strokeColor=#0d47a1;fontColor=#ffffff;fontSize=14;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="100" width="320" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="recordings-pk" value="🔑 id INT PRIMARY KEY AUTO_INCREMENT" style="text;html=1;strokeColor=none;fillColor=#bbdefb;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#0d47a1;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="45" y="135" width="310" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="recordings-fields" value="apex_id VARCHAR(50) UNIQUE&#xa;call_date DATETIME&#xa;orderref VARCHAR(50)&#xa;enqref VARCHAR(50)&#xa;obref VARCHAR(50)&#xa;client_ref VARCHAR(50)&#xa;client_name VARCHAR(100)&#xa;ddi VARCHAR(20)&#xa;campaign VARCHAR(100)&#xa;campaign_type VARCHAR(50)&#xa;halo_id INT&#xa;agent_name VARCHAR(100)&#xa;creative VARCHAR(100)&#xa;direction ENUM('inbound','outbound')&#xa;invoicing VARCHAR(50)&#xa;duration_seconds INT&#xa;file_size_bytes BIGINT&#xa;file_format VARCHAR(10) DEFAULT 'gsm'&#xa;r2_path VARCHAR(255)&#xa;r2_bucket VARCHAR(100)&#xa;retain_audio BOOLEAN DEFAULT FALSE" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="160" width="300" height="260" as="geometry"/>
+                </mxCell>
+                <mxCell id="recordings-status" value="processing_status ENUM(&#xa;  'pending','queued','processing',&#xa;  'completed','failed')&#xa;processing_started_at DATETIME&#xa;processing_completed_at DATETIME&#xa;processing_error TEXT&#xa;retry_count INT DEFAULT 0&#xa;next_retry_at DATETIME" style="text;html=1;strokeColor=none;fillColor=#fff3e0;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#e65100;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="425" width="300" height="100" as="geometry"/>
+                </mxCell>
+                <mxCell id="recordings-timestamps" value="uploaded_at DATETIME&#xa;created_at DATETIME&#xa;updated_at DATETIME" style="text;html=1;strokeColor=none;fillColor=#e8f5e9;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#2e7d32;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="530" width="300" height="45" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcriptions-table" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e8f5e9;strokeColor=#2e7d32;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="100" width="320" height="350" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcriptions-header" value="ai_call_transcriptions" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#2e7d32;strokeColor=#1b5e20;fontColor=#ffffff;fontSize=14;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="100" width="320" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcriptions-pk" value="🔑 id INT PRIMARY KEY AUTO_INCREMENT" style="text;html=1;strokeColor=none;fillColor=#c8e6c9;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#1b5e20;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="425" y="135" width="310" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcriptions-fk" value="🔗 ai_call_recording_id INT → recordings.id" style="text;html=1;strokeColor=none;fillColor=#fff9c4;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#f57f17;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="425" y="160" width="310" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcriptions-fields" value="apex_id VARCHAR(50)&#xa;full_transcript LONGTEXT&#xa;segments JSON&#xa;  [{ segment_id, speaker, text,&#xa;     start, end, words[] }]&#xa;redacted_transcript LONGTEXT&#xa;pii_detected JSON&#xa;  [{ type, value, start, end }]&#xa;language_detected VARCHAR(10)&#xa;confidence_score DECIMAL(5,4)&#xa;model_used VARCHAR(50)&#xa;processing_time_seconds INT&#xa;status ENUM('pending','processing',&#xa;            'completed','failed')&#xa;error_message TEXT" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="430" y="185" width="300" height="210" as="geometry"/>
+                </mxCell>
+                <mxCell id="transcriptions-timestamps" value="created_at DATETIME&#xa;updated_at DATETIME" style="text;html=1;strokeColor=none;fillColor=#e8f5e9;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#2e7d32;" parent="1" vertex="1">
+                    <mxGeometry x="430" y="400" width="300" height="35" as="geometry"/>
+                </mxCell>
+                <mxCell id="analysis-table" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#f3e5f5;strokeColor=#7b1fa2;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="800" y="100" width="320" height="480" as="geometry"/>
+                </mxCell>
+                <mxCell id="analysis-header" value="ai_call_analysis" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#7b1fa2;strokeColor=#4a148c;fontColor=#ffffff;fontSize=14;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="800" y="100" width="320" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="analysis-pk" value="🔑 id INT PRIMARY KEY AUTO_INCREMENT" style="text;html=1;strokeColor=none;fillColor=#e1bee7;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#4a148c;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="805" y="135" width="310" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="analysis-fk" value="🔗 ai_call_recording_id INT → recordings.id" style="text;html=1;strokeColor=none;fillColor=#fff9c4;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#f57f17;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="805" y="160" width="310" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="analysis-fields" value="summary TEXT&#xa;sentiment_score DECIMAL(3,1) 0-10&#xa;sentiment_label ENUM('very_negative',&#xa;  'negative','neutral','positive',&#xa;  'very_positive')&#xa;quality_score DECIMAL(4,1) 0-100&#xa;quality_zone ENUM('Excellent','Good',&#xa;  'Satisfactory','Below Average','Poor')&#xa;&#xa;key_topics JSON&#xa;  [{ topic, confidence, segment_ids[] }]&#xa;agent_actions JSON&#xa;  [{ action, timestamp, segment_id }]&#xa;score_impacts JSON&#xa;  [{ criteria, impact, reason,&#xa;     segment_id }]&#xa;performance_scores JSON&#xa;  { criterion: score (1-10) }&#xa;action_items JSON&#xa;  [{ item, priority, segment_id }]&#xa;compliance_flags JSON&#xa;  [{ type, severity, segment_id }]&#xa;speaker_metrics JSON&#xa;  { talk_ratio, interruptions, pace }&#xa;audio_analysis JSON (optional)" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="810" y="185" width="300" height="310" as="geometry"/>
+                </mxCell>
+                <mxCell id="analysis-model" value="model_used VARCHAR(100)&#xa;model_version VARCHAR(50)&#xa;processing_time_seconds INT&#xa;created_at DATETIME" style="text;html=1;strokeColor=none;fillColor=#e8f5e9;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#2e7d32;" parent="1" vertex="1">
+                    <mxGeometry x="810" y="500" width="300" height="70" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-table" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#fff3e0;strokeColor=#ef6c00;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="480" width="320" height="220" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-header" value="ai_client_config" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#ef6c00;strokeColor=#e65100;fontColor=#ffffff;fontSize=14;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="420" y="480" width="320" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-pk" value="🔑 id INT PRIMARY KEY AUTO_INCREMENT" style="text;html=1;strokeColor=none;fillColor=#ffe0b2;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#e65100;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="425" y="515" width="310" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="config-fields" value="client_ref VARCHAR(50) UNIQUE&#xa;client_name VARCHAR(100)&#xa;config_json JSON&#xa;  { topics[], agent_actions[],&#xa;    performance_rubric[],&#xa;    quality_signals{}, ... }&#xa;is_active BOOLEAN DEFAULT TRUE&#xa;created_at DATETIME&#xa;updated_at DATETIME" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="430" y="540" width="300" height="150" as="geometry"/>
+                </mxCell>
+                <mxCell id="fingerprint-table" value="" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#e0f2f1;strokeColor=#00796b;strokeWidth=2;" parent="1" vertex="1">
+                    <mxGeometry x="800" y="610" width="320" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="fingerprint-header" value="ai_voice_fingerprints" style="rounded=0;whiteSpace=wrap;html=1;fillColor=#00796b;strokeColor=#004d40;fontColor=#ffffff;fontSize=14;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="800" y="610" width="320" height="30" as="geometry"/>
+                </mxCell>
+                <mxCell id="fingerprint-pk" value="🔑 id INT PRIMARY KEY AUTO_INCREMENT" style="text;html=1;strokeColor=none;fillColor=#b2dfdb;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#004d40;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="805" y="645" width="310" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="fingerprint-fields" value="halo_id INT&#xa;agent_name VARCHAR(100)&#xa;embedding BLOB (speaker vector)&#xa;sample_count INT&#xa;last_updated DATETIME&#xa;created_at DATETIME" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=top;whiteSpace=wrap;rounded=0;fontSize=9;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="810" y="670" width="300" height="110" as="geometry"/>
+                </mxCell>
+                <mxCell id="rel1" value="" style="endArrow=ERone;startArrow=ERmany;html=1;rounded=1;strokeColor=#f57f17;strokeWidth=2;entryX=0;entryY=0.5;exitX=1;exitY=0.3;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="360" y="244" as="sourcePoint"/>
+                        <mxPoint x="420" y="170" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="390" y="244"/>
+                            <mxPoint x="390" y="170"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="rel1-label" value="1:1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#f57f17;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="375" y="200" width="30" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="rel2" value="" style="endArrow=ERone;startArrow=ERmany;html=1;rounded=1;strokeColor=#f57f17;strokeWidth=2;entryX=0;entryY=0.5;exitX=1;exitY=0.3;" parent="1" edge="1">
+                    <mxGeometry width="50" height="50" relative="1" as="geometry">
+                        <mxPoint x="360" y="244" as="sourcePoint"/>
+                        <mxPoint x="800" y="170" as="targetPoint"/>
+                        <Array as="points">
+                            <mxPoint x="390" y="244"/>
+                            <mxPoint x="390" y="80"/>
+                            <mxPoint x="780" y="80"/>
+                            <mxPoint x="780" y="170"/>
+                        </Array>
+                    </mxGeometry>
+                </mxCell>
+                <mxCell id="rel2-label" value="1:1" style="text;html=1;strokeColor=none;fillColor=none;align=center;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#f57f17;fontStyle=1;" parent="1" vertex="1">
+                    <mxGeometry x="760" y="150" width="30" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend" value="" style="rounded=1;whiteSpace=wrap;html=1;fillColor=#fafafa;strokeColor=#9e9e9e;strokeWidth=1;dashed=1;" parent="1" vertex="1">
+                    <mxGeometry x="40" y="610" width="320" height="180" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend-title" value="LEGEND" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=12;fontStyle=1;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="50" y="615" width="100" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend-pk" value="🔑 Primary Key" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="55" y="640" width="120" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend-fk" value="🔗 Foreign Key" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="55" y="660" width="120" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend-json" value="JSON = Complex nested data" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="55" y="680" width="200" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend-status" value="Orange = Processing status fields" style="text;html=1;strokeColor=none;fillColor=#fff3e0;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#e65100;" parent="1" vertex="1">
+                    <mxGeometry x="55" y="705" width="200" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend-ts" value="Green = Timestamp fields" style="text;html=1;strokeColor=none;fillColor=#e8f5e9;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#2e7d32;" parent="1" vertex="1">
+                    <mxGeometry x="55" y="730" width="200" height="20" as="geometry"/>
+                </mxCell>
+                <mxCell id="legend-seg" value="segment_id = UUID for traceability" style="text;html=1;strokeColor=none;fillColor=none;align=left;verticalAlign=middle;whiteSpace=wrap;rounded=0;fontSize=10;fontColor=#333333;" parent="1" vertex="1">
+                    <mxGeometry x="55" y="755" width="200" height="20" as="geometry"/>
+                </mxCell>
+            </root>
+        </mxGraphModel>
+    </diagram>
+</mxfile>

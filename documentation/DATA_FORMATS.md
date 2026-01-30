@@ -9,11 +9,12 @@ Complete JSON schema documentation for all data structures in Angel Intelligence
 3. [Analysis Results](#analysis-results)
 4. [Key Topics](#key-topics)
 5. [Agent Actions Performed](#agent-actions-performed)
-6. [Performance Scores](#performance-scores)
-7. [Speaker Metrics](#speaker-metrics)
-8. [Audio Observations](#audio-observations)
-9. [Compliance Flags](#compliance-flags)
-10. [Action Items](#action-items)
+6. [Score Impacts](#score-impacts)
+7. [Performance Scores](#performance-scores)
+8. [Speaker Metrics](#speaker-metrics)
+9. [Audio Observations](#audio-observations)
+10. [Compliance Flags](#compliance-flags)
+11. [Action Items](#action-items)
 
 ---
 
@@ -25,6 +26,7 @@ Word and sentence-level segments for karaoke playback and transcript display.
 
 ```json
 {
+  "segment_id": "seg_a1b2c3d4",
   "text": "Hello, thank you for calling Age UK.",
   "start": 0.0,
   "end": 2.45,
@@ -47,6 +49,7 @@ Word and sentence-level segments for karaoke playback and transcript display.
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `segment_id` | string | UUID-based unique identifier (e.g., "seg_a1b2c3d4"). Used to trace this segment through AI analysis - same ID appears in agent_actions, score_impacts, and compliance_flags when they reference this segment. |
 | `text` | string | Full text of the segment |
 | `start` | float | Start time in seconds (3 decimal places) |
 | `end` | float | End time in seconds (3 decimal places) |
@@ -54,6 +57,17 @@ Word and sentence-level segments for karaoke playback and transcript display.
 | `speaker_id` | string | Unique speaker identifier |
 | `confidence` | float | Transcription confidence (0.0-1.0) |
 | `words` | array | Word-level timestamps for karaoke |
+
+### Segment ID Traceability
+
+The `segment_id` is assigned at transcription time and follows the segment through the entire analysis lifecycle:
+
+1. **Transcription**: Segment created with UUID-based `segment_id` (e.g., "seg_a1b2c3d4")
+2. **AI Analysis**: LLM references segments by their `segment_id` in its output
+3. **Flagged Items**: `agent_actions`, `score_impacts`, and `compliance_flags` include `segment_ids` array linking back to original transcript segments
+4. **Frontend**: Can navigate from any flagged item directly to the transcript segment
+
+This enables full traceability from any flagged item back to the exact moment in the call.
 
 ### Word Object
 
@@ -197,15 +211,16 @@ Topics detected from the configured topics list.
 
 ## Agent Actions Performed
 
-Actions from the configured list that the agent performed.
+Actions from the configured list that the agent performed, linked to transcript segments.
 
 ### Schema
 
 ```json
 {
   "action": "Greeted supporter",
+  "segment_ids": ["seg_a1b2c3d4"],
   "timestamp_start": 0.0,
-  "quality": 5
+  "timestamp_end": 2.5
 }
 ```
 
@@ -214,18 +229,72 @@ Actions from the configured list that the agent performed.
 | Field | Type | Description |
 |-------|------|-------------|
 | `action` | string | Action name from configuration |
-| `timestamp_start` | float | When action occurred (seconds) |
-| `quality` | int | Quality rating 1-5 (5 = excellent) |
+| `segment_ids` | array | Array of segment IDs where this action occurred (links back to transcript segments) |
+| `timestamp_start` | float | When action started (seconds) - derived from first segment |
+| `timestamp_end` | float | When action ended (seconds) - derived from last segment |
 
-### Quality Scale
+### Segment Linking
 
-| Score | Description |
-|-------|-------------|
-| 5 | Excellent - exceeded expectations |
-| 4 | Good - performed well |
-| 3 | Adequate - met minimum standard |
-| 2 | Poor - needs improvement |
-| 1 | Failed - did not perform correctly |
+The `segment_ids` array contains the UUID-based segment IDs from the transcript that this action references. This allows direct navigation from the action to the exact moment(s) in the call where it occurred.
+
+For actions spanning multiple segments:
+```json
+{
+  "action": "Explained Gift Aid",
+  "segment_ids": ["seg_a1b2c3d4", "seg_e5f6g7h8", "seg_i9j0k1l2"],
+  "timestamp_start": 45.2,
+  "timestamp_end": 78.5
+}
+```
+
+---
+
+## Score Impacts
+
+Individual moments in the call that positively or negatively impacted the quality score, linked to transcript segments.
+
+### Schema
+
+```json
+{
+  "key": "uuid-v4-string",
+  "segment_ids": ["seg_a1b2c3d4"],
+  "impact": 3,
+  "category": "Empathy",
+  "reason": "Warm, friendly greeting that put supporter at ease",
+  "quote": "Good morning, lovely to speak with you today!",
+  "timestamp_start": 0.0,
+  "timestamp_end": 2.5
+}
+```
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `key` | string | UUID v4 for React list rendering |
+| `segment_ids` | array | Array of segment IDs where this moment occurred (links back to transcript) |
+| `impact` | int | Score impact from -5 to +5 |
+| `category` | string | Performance category affected (from rubric) |
+| `reason` | string | Explanation of why this affected the score |
+| `quote` | string | Exact quote from transcript as evidence |
+| `timestamp_start` | float | When moment started (seconds) - derived from first segment |
+| `timestamp_end` | float | When moment ended (seconds) - derived from last segment |
+
+### Impact Scale
+
+| Impact | Meaning |
+|--------|---------|
+| +5 | Exceptional - exemplary moment, training example quality |
+| +3 to +4 | Strong positive - notably good handling |
+| +1 to +2 | Minor positive - good practice observed |
+| -1 to -2 | Minor negative - could improve |
+| -3 to -4 | Significant negative - clear problem |
+| -5 | Severe issue - major quality concern |
+
+### Segment Linking
+
+The `segment_ids` array enables direct navigation from a score impact to the exact moment(s) in the transcript. These are the same UUID-based IDs assigned during transcription.
 
 ---
 
@@ -339,14 +408,17 @@ Audio-specific analysis (only present when `ANALYSIS_MODE=audio`).
 
 ## Compliance Flags
 
-Issues or concerns that require attention.
+Issues or concerns that require attention, linked to specific transcript segments.
 
 ### Schema
 
 ```json
 {
+  "key": "uuid-v4-string",
   "type": "data_protection",
+  "segment_ids": ["seg_a1b2c3d4", "seg_e5f6g7h8"],
   "issue": "Agent read full card number aloud instead of last 4 digits",
+  "quote": "Your card number is 4532 1234 5678 9012",
   "severity": "high",
   "timestamp_start": 156.2,
   "timestamp_end": 159.8
@@ -357,11 +429,18 @@ Issues or concerns that require attention.
 
 | Field | Type | Description |
 |-------|------|-------------|
+| `key` | string | UUID v4 for React list rendering |
 | `type` | string | Category of compliance issue |
+| `segment_ids` | array | Array of segment IDs where issue occurred (links back to transcript) |
 | `issue` | string | Description of the issue |
+| `quote` | string | Exact quote from transcript showing the issue |
 | `severity` | string | "low", "medium", "high", "critical" |
-| `timestamp_start` | float | When issue occurred (seconds) |
-| `timestamp_end` | float | When issue ended (seconds) |
+| `timestamp_start` | float | When issue started (seconds) - derived from first segment |
+| `timestamp_end` | float | When issue ended (seconds) - derived from last segment |
+
+### Segment Linking
+
+The `segment_ids` array enables direct navigation from a compliance flag to the exact moment(s) in the transcript where it occurred. The AI copies these IDs directly from the transcript segments.
 
 ### Compliance Types
 

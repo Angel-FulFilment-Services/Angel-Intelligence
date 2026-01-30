@@ -250,37 +250,78 @@ CREATE TABLE ai_call_analysis (
 
 ### ai_call_annotations
 
-Human annotations for model fine-tuning.
+Human annotations for model fine-tuning. Supports both legacy annotations and Dojo session segment-level annotations.
 
 ```sql
 CREATE TABLE ai_call_annotations (
     id INT UNSIGNED AUTO_INCREMENT PRIMARY KEY,
     ai_call_recording_id INT UNSIGNED NOT NULL,
     ai_call_analysis_id INT UNSIGNED DEFAULT NULL,
+    user_id INT UNSIGNED DEFAULT NULL,
     
-    -- Annotation details
-    annotation_type ENUM('sentiment', 'quality', 'topics', 'actions', 'general') NOT NULL,
+    -- Legacy annotation details
+    annotation_type ENUM('sentiment', 'quality', 'topics', 'actions', 'general', 'compliance') NOT NULL,
+    field_name VARCHAR(100) DEFAULT NULL,
     original_value JSON DEFAULT NULL,
-    corrected_value JSON NOT NULL,
-    annotator_id INT UNSIGNED DEFAULT NULL,
-    annotator_notes TEXT DEFAULT NULL,
+    corrected_value JSON DEFAULT NULL,
+    notes TEXT DEFAULT NULL,
+    tags JSON DEFAULT NULL,
+    
+    -- Segment timestamps (adjusted by trainer)
+    timestamp_start DECIMAL(10,3) DEFAULT NULL,
+    timestamp_end DECIMAL(10,3) DEFAULT NULL,
+    
+    -- Dojo Session fields (segment-level training)
+    segment_key VARCHAR(100) DEFAULT NULL,         -- Unique segment identifier (type-label-id)
+    segment_type ENUM('agent_action', 'score_impact', 'compliance_flag') DEFAULT NULL,
+    ai_assessment VARCHAR(255) DEFAULT NULL,       -- AI's original assessment value
+    trainer_assessment VARCHAR(255) DEFAULT NULL,  -- Trainer's assessment
+    disagreement_reason ENUM(
+        'too_harsh', 'too_lenient', 'wrong_category', 
+        'not_quality_affecting', 'false_positive', 
+        'incorrect_timestamp', 'missed_context', 'other'
+    ) DEFAULT NULL,
+    original_timestamp_start DECIMAL(10,3) DEFAULT NULL,  -- AI's original start time
+    original_timestamp_end DECIMAL(10,3) DEFAULT NULL,    -- AI's original end time
+    segment_ids JSON DEFAULT NULL,                 -- Array of transcript segment IDs in range
     
     -- Training status
+    is_training_data BOOLEAN DEFAULT TRUE,
     used_for_training BOOLEAN DEFAULT FALSE,
     training_job_id VARCHAR(100) DEFAULT NULL,
     
     -- Timestamps
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
     
     -- Constraints
     FOREIGN KEY (ai_call_recording_id) 
         REFERENCES ai_call_recordings(id) ON DELETE CASCADE,
+    FOREIGN KEY (ai_call_analysis_id)
+        REFERENCES ai_call_analysis(id) ON DELETE SET NULL,
     
     -- Indexes
     INDEX idx_type (annotation_type),
-    INDEX idx_training (used_for_training)
+    INDEX idx_segment_type (segment_type),
+    INDEX idx_training (is_training_data, used_for_training),
+    INDEX idx_segment_key (segment_key),
+    INDEX idx_disagreement (disagreement_reason)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 ```
+
+**Dojo Session Training Fields:**
+- `segment_key`: Unique identifier for the segment (format: "type-label-id")
+- `segment_type`: Type of segment - agent_action, score_impact, or compliance_flag
+- `ai_assessment`: The AI's original assessment value
+- `trainer_assessment`: The trainer's corrected/confirmed assessment
+- `disagreement_reason`: Why the trainer disagreed (null if they agreed)
+- `original_timestamp_*`: AI's original segment boundaries (for boundary training)
+- `segment_ids`: Transcript segment indices within the adjusted time range
+
+**Derived Fields (calculated in queries):**
+- `is_agreement`: TRUE when disagreement_reason IS NULL
+- `timestamp_adjusted`: TRUE when timestamps differ from originals
+- `training_weight`: 0.5 for agreements, 1.0 for corrections
 
 ---
 
