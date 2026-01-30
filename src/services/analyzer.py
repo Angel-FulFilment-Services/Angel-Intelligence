@@ -472,9 +472,11 @@ class AnalysisService:
         Format transcript segments with timestamps and IDs for LLM analysis.
         
         Uses existing segment_id from transcript (added by transcriber service).
+        segment_id is UUID-based (e.g., seg_a1b2c3d4) for lifecycle traceability.
+        
         Produces format like:
-        [seg_001] [0.0s - 15.2s] Agent: Good morning, thank you for calling...
-        [seg_002] [15.2s - 22.5s] Supporter: Hello, I wanted to ask about...
+        [seg_a1b2c3d4] [0.0s - 15.2s] Agent: Good morning, thank you for calling...
+        [seg_e5f6g7h8] [15.2s - 22.5s] Supporter: Hello, I wanted to ask about...
         
         Returns:
             tuple: (formatted_transcript_string, segment_map)
@@ -498,8 +500,8 @@ class AnalysisService:
             if not text:
                 continue
             
-            # Use existing segment_id from transcript, or fall back to index-based
-            segment_id = seg.get("segment_id") or f"seg_{i+1:03d}"
+            # Use existing segment_id from transcript, or generate UUID-based fallback
+            segment_id = seg.get("segment_id") or f"seg_{uuid.uuid4().hex[:8]}"
             
             # Normalise speaker label for readability
             if speaker in ["SPEAKER_00", "agent"] or speaker.startswith("agent"):
@@ -590,7 +592,7 @@ class AnalysisService:
                     seg_end = seg.get("end", 0)
                     # Include segment if it overlaps with chunk
                     if seg_start < chunk_end and seg_end > chunk_start:
-                        segment_id = seg.get("segment_id") or f"seg_{segments.index(seg)+1:03d}"
+                        segment_id = seg.get("segment_id") or f"seg_{uuid.uuid4().hex[:8]}"
                         speaker = seg.get("speaker", "Unknown")
                         if speaker in ["SPEAKER_00", "agent"] or speaker.startswith("agent"):
                             speaker_label = "Agent"
@@ -817,13 +819,13 @@ Return your analysis as valid JSON matching this exact structure:
         {{"name": "Topic Name In Title Case", "confidence": 0.0-1.0}}
     ],
     "agent_actions": [
-        {{"action": "specific action the agent took", "segment_ids": ["seg_001", "seg_002"]}}
+        {{"action": "specific action the agent took", "segment_ids": ["seg_a1b2c3d4", "seg_e5f6g7h8"]}}
     ],
     "score_impacts": [
-        {{"segment_ids": ["seg_001"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote from transcript"}}
+        {{"segment_ids": ["seg_a1b2c3d4"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote from transcript"}}
     ],
     "compliance_flags": [
-        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_001", "seg_002"], "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
+        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_a1b2c3d4", "seg_e5f6g7h8"], "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
     ],
     "performance_scores": {{
         {perf_scores_json}
@@ -851,8 +853,8 @@ AUDIO ANALYSIS GUIDANCE:
 - ANALYSE THE ENTIRE CALL from start to finish
 
 SEGMENT IDS - CRITICAL:
-- segment_ids is an ARRAY - use ["seg_001"] for single segment or ["seg_001", "seg_002"] for spans
-- Copy segment_id values EXACTLY from the transcript
+- segment_ids is an ARRAY - use ["seg_a1b2c3d4"] for single segment or ["seg_a1b2c3d4", "seg_e5f6g7h8"] for spans
+- Copy segment_id values EXACTLY from the transcript (they are UUID-based like seg_a1b2c3d4)
 - Do NOT invent segment IDs - only use ones that appear in the transcript
 
 SCORE IMPACT SCALE:
@@ -1272,13 +1274,13 @@ Return your analysis as valid JSON matching this exact structure:
         {{"name": "Topic Name", "confidence": 0.0-1.0}}
     ],
     "agent_actions": [
-        {{"action": "specific action", "segment_ids": ["seg_XXX"]}}
+        {{"action": "specific action", "segment_ids": ["<seg_id_from_transcript>"]}}
     ],
     "score_impacts": [
-        {{"segment_ids": ["seg_XXX"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote"}}
+        {{"segment_ids": ["<seg_id_from_transcript>"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote"}}
     ],
     "compliance_flags": [
-        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_XXX"], "severity": "low/medium/high/critical", "issue": "description", "quote": "exact quote"}}
+        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["<seg_id_from_transcript>"], "severity": "low/medium/high/critical", "issue": "description", "quote": "exact quote"}}
     ],
     "performance_scores": {{
         {perf_scores_json}
@@ -1301,7 +1303,7 @@ AUDIO ANALYSIS GUIDANCE:
 - Use segment_ids ARRAY to reference specific moments - can span multiple segments
 - Include quotes from the transcript as evidence
 
-SEGMENT IDS: Use array format ["seg_XXX"] or ["seg_XXX", "seg_YYY"] for spans
+SEGMENT IDS: Copy segment_ids EXACTLY from the transcript (UUID-based like seg_a1b2c3d4). Use array format.
 
 SCORE IMPACT SCALE:
 - +5: Exceptional moment (exemplary)
@@ -1433,13 +1435,13 @@ Return your analysis as valid JSON matching this exact structure:
         {{"name": "Topic Name In Title Case", "confidence": 0.0-1.0}}
     ],
     "agent_actions": [
-        {{"action": "specific action the agent took", "segment_ids": ["seg_001", "seg_002"]}}
+        {{"action": "specific action the agent took", "segment_ids": ["seg_a1b2c3d4", "seg_e5f6g7h8"]}}
     ],
     "score_impacts": [
-        {{"segment_ids": ["seg_001"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote from transcript"}}
+        {{"segment_ids": ["seg_a1b2c3d4"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote from transcript"}}
     ],
     "compliance_flags": [
-        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_001", "seg_002"], "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
+        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_a1b2c3d4", "seg_e5f6g7h8"], "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
     ],
     "performance_scores": {{
         {perf_scores_json}
@@ -1490,8 +1492,8 @@ ARRAY LIMITS (do not exceed):
 - compliance_flags: only actual issues found - use empty array [] if none
 
 SEGMENT IDs - CRITICAL:
-- segment_ids is an ARRAY - use ["seg_001"] for single segment or ["seg_001", "seg_002", "seg_003"] for spans
-- Copy segment_id values EXACTLY from the transcript (e.g., "seg_001", "seg_015")
+- segment_ids is an ARRAY - use ["seg_a1b2c3d4"] for single or ["seg_a1b2c3d4", "seg_e5f6g7h8"] for spans
+- Copy segment_id values EXACTLY from the transcript (UUID-based like seg_a1b2c3d4)
 - Each segment_id references a specific line in the transcript above
 - Do NOT invent segment IDs - only use ones that appear in the transcript
 - Use multiple segment_ids when an action/impact spans multiple transcript segments
@@ -1526,14 +1528,14 @@ Return your analysis as valid JSON matching this EXACT structure:
         {{"name": "Gift Aid", "confidence": 0.8}}
     ],
     "agent_actions": [
-        {{"action": "Greeted supporter", "segment_ids": ["seg_001"]}},
-        {{"action": "Verified identity", "segment_ids": ["seg_005", "seg_006"]}},
-        {{"action": "Explained donation options", "segment_ids": ["seg_012", "seg_013", "seg_014"]}},
-        {{"action": "Closed call", "segment_ids": ["seg_025"]}}
+        {{"action": "Greeted supporter", "segment_ids": ["seg_a1b2c3d4"]}},
+        {{"action": "Verified identity", "segment_ids": ["seg_e5f6g7h8", "seg_i9j0k1l2"]}},
+        {{"action": "Explained donation options", "segment_ids": ["seg_m3n4o5p6", "seg_q7r8s9t0"]}},
+        {{"action": "Closed call", "segment_ids": ["seg_u1v2w3x4"]}}  
     ],
     "score_impacts": [
-        {{"segment_ids": ["seg_001"], "impact": 3, "category": "{perf_keys[0] if perf_keys else 'Empathy'}", "reason": "Warm, friendly greeting", "quote": "Good morning, lovely to speak with you!"}},
-        {{"segment_ids": ["seg_015"], "impact": -2, "category": "{perf_keys[2] if len(perf_keys) > 2 else 'Listening'}", "reason": "Interrupted supporter", "quote": "Yes but what I meant was--"}}
+        {{"segment_ids": ["seg_a1b2c3d4"], "impact": 3, "category": "{perf_keys[0] if perf_keys else 'Empathy'}", "reason": "Warm, friendly greeting", "quote": "Good morning, lovely to speak with you!"}},
+        {{"segment_ids": ["seg_m3n4o5p6"], "impact": -2, "category": "{perf_keys[2] if len(perf_keys) > 2 else 'Listening'}", "reason": "Interrupted supporter", "quote": "Yes but what I meant was--"}}
     ],
     "compliance_flags": [],
     "performance_scores": {{
@@ -1572,7 +1574,7 @@ CRITICAL RULES:
 8. For compliance_flags: ONLY include ACTUAL issues - use empty array [] if no issues found
 9. Use Title Case for topic names (e.g., "Regular Giving", "Gift Aid", "Direct Debit")
 10. Compliance issues should ALSO appear in score_impacts with negative impact
-11. SEGMENT IDs - use array format ["seg_001"] or ["seg_001", "seg_002"] for spans - copy exactly from transcript"""
+11. SEGMENT IDs - copy segment_ids EXACTLY from transcript (UUID-based like seg_a1b2c3d4) - use array format"""
     
     def _generate_text_response(self, prompt: str) -> str:
         """Generate text response from model."""
@@ -1714,8 +1716,8 @@ CRITICAL RULES:
         """
         Enrich segment_ids references with actual timestamps from the segment_map.
         
-        The LLM outputs segment_ids arrays (e.g., ["seg_001", "seg_002"]), and we look up
-        the actual start/end timestamps from the transcript segments.
+        The LLM outputs segment_ids arrays (e.g., ["seg_a1b2c3d4", "seg_e5f6g7h8"]), 
+        and we look up the actual start/end timestamps from the transcript segments.
         
         For arrays, timestamp_start is the start of the first segment and timestamp_end
         is the end of the last segment in the array.

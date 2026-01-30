@@ -604,6 +604,16 @@ class CallAnnotation:
     Model for ai_call_annotations table.
     
     Human corrections/annotations for training the analysis model.
+    Supports both legacy annotations and Dojo session annotations.
+    
+    Dojo Session Fields:
+    - segment_key: Unique key for segment (format: "type-label-id")
+    - segment_type: agent_action, score_impact, or compliance_flag
+    - ai_assessment: AI's original assessment value
+    - trainer_assessment: Trainer's assessment (or same as AI if agree)
+    - disagreement_reason: Reason for disagreement (null if agree)
+    - original_timestamp_start/end: AI's original timestamps
+    - segment_ids: Array of transcript segment IDs within adjusted range
     """
     id: Optional[int] = None
     ai_call_analysis_id: int = 0
@@ -620,18 +630,32 @@ class CallAnnotation:
     created_at: Optional[datetime] = None
     updated_at: Optional[datetime] = None
     
+    # Dojo Session fields
+    segment_key: Optional[str] = None  # Unique segment identifier (type-label-id)
+    segment_type: Optional[str] = None  # agent_action, score_impact, compliance_flag
+    ai_assessment: Optional[str] = None  # AI's original assessment
+    trainer_assessment: Optional[str] = None  # Trainer's assessment
+    disagreement_reason: Optional[str] = None  # Reason for disagreement
+    original_timestamp_start: Optional[float] = None  # AI's original start time
+    original_timestamp_end: Optional[float] = None  # AI's original end time
+    segment_ids: Optional[List[int]] = None  # Transcript segment IDs in range
+    
     def save(self) -> int:
         """Save annotation to database and return the ID."""
         db = get_db_connection()
         
         tags_json = json.dumps(self.tags) if self.tags else None
+        segment_ids_json = json.dumps(self.segment_ids) if self.segment_ids else None
         
         self.id = db.insert("""
             INSERT INTO ai_call_annotations
             (ai_call_analysis_id, user_id, annotation_type, field_name,
              original_value, corrected_value, timestamp_start, timestamp_end,
-             tags, notes, is_training_data, created_at, updated_at)
-            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+             tags, notes, is_training_data, segment_key, segment_type,
+             ai_assessment, trainer_assessment, disagreement_reason,
+             original_timestamp_start, original_timestamp_end, segment_ids,
+             created_at, updated_at)
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
         """, (
             self.ai_call_analysis_id,
             self.user_id,
@@ -644,6 +668,14 @@ class CallAnnotation:
             tags_json,
             self.notes,
             self.is_training_data,
+            self.segment_key,
+            self.segment_type,
+            self.ai_assessment,
+            self.trainer_assessment,
+            self.disagreement_reason,
+            self.original_timestamp_start,
+            self.original_timestamp_end,
+            segment_ids_json,
         ))
         
         return self.id
@@ -652,12 +684,19 @@ class CallAnnotation:
     def get_training_data(
         since: Optional[datetime] = None,
         annotation_type: Optional[str] = None,
+        segment_type: Optional[str] = None,
         limit: int = 1000
     ) -> List[Dict[str, Any]]:
         """
         Export training data for model fine-tuning.
         
         Returns annotations joined with analysis and transcription data.
+        Includes Dojo session fields for segment-level training.
+        
+        Training data includes:
+        - is_agreement: True if trainer agreed with AI (disagreement_reason is null)
+        - timestamp_adjusted: True if trainer adjusted the segment boundaries
+        - training_weight: 0.5 for agreements, 1.0 for corrections
         """
         db = get_db_connection()
         
@@ -670,13 +709,37 @@ class CallAnnotation:
                 a.corrected_value,
                 a.notes,
                 a.created_at,
+                a.timestamp_start,
+                a.timestamp_end,
+                -- Dojo session fields
+                a.segment_key,
+                a.segment_type,
+                a.ai_assessment,
+                a.trainer_assessment,
+                a.disagreement_reason,
+                a.original_timestamp_start,
+                a.original_timestamp_end,
+                a.segment_ids,
+                -- Derived training fields
+                CASE WHEN a.disagreement_reason IS NULL THEN TRUE ELSE FALSE END as is_agreement,
+                CASE WHEN (a.timestamp_start != a.original_timestamp_start 
+                          OR a.timestamp_end != a.original_timestamp_end) 
+                     THEN TRUE ELSE FALSE END as timestamp_adjusted,
+                CASE WHEN a.disagreement_reason IS NULL THEN 0.5 ELSE 1.0 END as training_weight,
+                -- Analysis and transcript data
+                an.id as analysis_id,
                 an.summary,
                 an.sentiment_score,
                 an.sentiment_label,
                 an.quality_score,
                 an.key_topics,
+                an.agent_actions,
+                an.score_impacts,
+                an.compliance_flags,
+                an.full_analysis,
                 t.full_transcript,
-                t.redacted_transcript
+                t.redacted_transcript,
+                t.segments as transcript_segments
             FROM ai_call_annotations a
             JOIN ai_call_analysis an ON a.ai_call_analysis_id = an.id
             JOIN ai_call_recordings r ON an.ai_call_recording_id = r.id
@@ -692,6 +755,10 @@ class CallAnnotation:
         if annotation_type:
             query += " AND a.annotation_type = %s"
             params.append(annotation_type)
+        
+        if segment_type:
+            query += " AND a.segment_type = %s"
+            params.append(segment_type)
         
         query += " ORDER BY a.created_at DESC LIMIT %s"
         params.append(limit)

@@ -401,7 +401,7 @@ class TranscriptionService:
         
         Format matches specification for karaoke feature:
         {
-            "segment_id": "seg_001",
+            "segment_id": "seg_a1b2c3d4",  # UUID-based for lifecycle traceability
             "text": "Hello, thank you for calling.",
             "start": 0.0,
             "end": 2.5,
@@ -413,11 +413,18 @@ class TranscriptionService:
                 {"word": "thank", "start": 0.5, "end": 0.7, "confidence": 0.96}
             ]
         }
+        
+        segment_id is a UUID-based identifier (seg_<8-char-uuid>) assigned at 
+        transcription time. This same ID follows the segment through analysis,
+        allowing flagged items (agent_actions, score_impacts, compliance_flags)
+        to trace back to the original transcript segment.
         """
         formatted = []
         for i, segment in enumerate(segments):
+            # Generate UUID-based segment ID for lifecycle traceability
+            segment_uuid = str(uuid.uuid4())[:8]  # First 8 chars of UUID4
             formatted_segment = {
-                "segment_id": f"seg_{i+1:03d}",  # Unique ID for this segment
+                "segment_id": f"seg_{segment_uuid}",  # UUID-based for traceability
                 "text": segment.get("text", segment.get("word", "")).strip(),
                 "start": round(segment.get("start", 0), 3),
                 "end": round(segment.get("end", 0), 3),

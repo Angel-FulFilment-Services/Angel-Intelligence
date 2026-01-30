@@ -343,13 +343,13 @@ Return your analysis as valid JSON matching this exact structure:
         {{"name": "Topic Name In Title Case", "confidence": 0.0-1.0}}
     ],
     "agent_actions": [
-        {{"action": "specific action the agent took", "segment_ids": ["seg_001", "seg_002"]}}
+        {{"action": "specific action the agent took", "segment_ids": ["seg_a1b2c3d4", "seg_e5f6g7h8"]}}
     ],
     "score_impacts": [
-        {{"segment_ids": ["seg_001"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote from transcript"}}
+        {{"segment_ids": ["seg_a1b2c3d4"], "impact": -5 to +5, "category": "one of: {perf_keys_list}", "reason": "why this affected the score", "quote": "exact quote from transcript"}}
     ],
     "compliance_flags": [
-        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_001", "seg_002"], "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
+        {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_a1b2c3d4", "seg_e5f6g7h8"], "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
     ],
     "performance_scores": {{
         {perf_scores_json}
@@ -360,8 +360,8 @@ Return your analysis as valid JSON matching this exact structure:
 }}
 
 SEGMENT IDS - CRITICAL:
-- segment_ids is an ARRAY - use ["seg_001"] for single segment or ["seg_001", "seg_002"] for spans
-- Copy segment_id values EXACTLY from the transcript
+- segment_ids is an ARRAY - use ["seg_a1b2c3d4"] for single segment or ["seg_a1b2c3d4", "seg_e5f6g7h8"] for spans
+- Copy segment_id values EXACTLY from the transcript (UUID-based like seg_a1b2c3d4)
 - Do NOT invent segment IDs - only use ones that appear in the transcript
 
 SCORE IMPACT SCALE:

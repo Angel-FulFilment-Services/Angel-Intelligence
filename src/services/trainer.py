@@ -192,9 +192,14 @@ class TrainingService:
     
     def prepare_training_data(self, limit: int = 2500) -> List[Dict[str, Any]]:
         """
-        Load and prepare training data from annotations.
+        Load and prepare training data from Dojo session annotations.
         
-        Returns list of (input, output) pairs for fine-tuning.
+        Training Approach:
+        - Agreement examples (disagreement_reason is NULL): Positive reinforcement, weight 0.5
+        - Disagreement examples: Corrections for AI mistakes, weight 1.0
+        - False positives: Special handling to reduce over-flagging
+        
+        Returns list of training samples with weights for fine-tuning.
         """
         from src.database import CallAnnotation
         
@@ -208,83 +213,269 @@ class TrainingService:
         training_samples = []
         
         for row in raw_data:
-            transcript = row.get("full_transcript") or row.get("redacted_transcript", "")
-            if not transcript:
-                continue
-            
-            # Build the corrected analysis based on annotation
-            field_name = row.get("field_name")
-            corrected_value = row.get("corrected_value")
-            
-            # Get the full original analysis
-            original_analysis = {
-                "summary": row.get("summary", ""),
-                "sentiment_score": float(row.get("sentiment_score") or 5),
-                "sentiment_label": row.get("sentiment_label", "neutral"),
-                "quality_score": float(row.get("quality_score") or 50),
-                "key_topics": json.loads(row.get("key_topics") or "[]") if isinstance(row.get("key_topics"), str) else row.get("key_topics", []),
-            }
-            
-            # Apply the correction
-            if field_name and corrected_value:
-                try:
-                    # Handle nested fields like "performance_scores.overall"
-                    if "." in field_name:
-                        parts = field_name.split(".")
-                        target = original_analysis
-                        for part in parts[:-1]:
-                            target = target.setdefault(part, {})
-                        target[parts[-1]] = json.loads(corrected_value) if corrected_value.startswith(('[', '{')) else corrected_value
-                    else:
-                        original_analysis[field_name] = json.loads(corrected_value) if corrected_value.startswith(('[', '{')) else corrected_value
-                except (json.JSONDecodeError, TypeError):
-                    original_analysis[field_name] = corrected_value
-            
-            # Build training sample
-            training_samples.append({
-                "transcript": transcript[:8000],  # Limit transcript length
-                "analysis": original_analysis,
-            })
+            sample = self._prepare_sample(row)
+            if sample:
+                training_samples.append(sample)
         
-        logger.info(f"Prepared {len(training_samples)} training samples from annotations")
+        # Log training data statistics
+        agreements = sum(1 for s in training_samples if s.get("is_agreement", False))
+        corrections = len(training_samples) - agreements
+        logger.info(f"Prepared {len(training_samples)} training samples: "
+                   f"{agreements} agreements (weight 0.5), {corrections} corrections (weight 1.0)")
+        
         return training_samples
+    
+    def _prepare_sample(self, row: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+        """
+        Prepare a training sample from Dojo session annotation.
+        
+        Extracts the relevant transcript segment and builds input/output
+        based on the trainer's assessment.
+        """
+        # Get transcript segments for this annotation
+        segment_ids = row.get("segment_ids")
+        if isinstance(segment_ids, str):
+            try:
+                segment_ids = json.loads(segment_ids)
+            except json.JSONDecodeError:
+                segment_ids = []
+        
+        # Get full transcript segments
+        transcript_segments = row.get("transcript_segments")
+        if isinstance(transcript_segments, str):
+            try:
+                transcript_segments = json.loads(transcript_segments)
+            except json.JSONDecodeError:
+                transcript_segments = []
+        
+        # Extract relevant segment text based on segment_ids or timestamps
+        segment_text = self._extract_segment_text(
+            transcript_segments,
+            segment_ids,
+            row.get("timestamp_start"),
+            row.get("timestamp_end")
+        )
+        
+        if not segment_text:
+            # Fall back to full transcript if segment extraction fails
+            segment_text = row.get("full_transcript") or row.get("redacted_transcript", "")
+            if not segment_text:
+                return None
+        
+        # Determine training parameters
+        segment_type = row.get("segment_type")  # agent_action, score_impact, compliance_flag
+        disagreement_reason = row.get("disagreement_reason")
+        is_agreement = disagreement_reason is None
+        training_weight = 0.5 if is_agreement else 1.0
+        
+        trainer_assessment = row.get("trainer_assessment")
+        ai_assessment = row.get("ai_assessment")
+        
+        # For false positives, use special training signal
+        is_false_positive = (
+            trainer_assessment == "False Positive" or 
+            disagreement_reason == "false_positive"
+        )
+        
+        # Build the expected output based on segment type
+        if segment_type == "agent_action":
+            output = self._build_agent_action_output(row, is_false_positive)
+        elif segment_type == "score_impact":
+            output = self._build_score_impact_output(row, is_false_positive)
+        elif segment_type == "compliance_flag":
+            output = self._build_compliance_flag_output(row, is_false_positive)
+        else:
+            # Generic output for unknown segment types
+            output = {
+                "assessment": trainer_assessment or ai_assessment,
+                "corrected": not is_agreement,
+            }
+        
+        return {
+            "transcript": segment_text[:8000],
+            "analysis": output,
+            "weight": training_weight,
+            "is_agreement": is_agreement,
+            "is_false_positive": is_false_positive,
+            "segment_type": segment_type,
+            "disagreement_reason": disagreement_reason,
+        }
+    
+    def _extract_segment_text(
+        self,
+        transcript_segments: List[Dict[str, Any]],
+        segment_ids: Optional[List[int]],
+        timestamp_start: Optional[float],
+        timestamp_end: Optional[float]
+    ) -> str:
+        """
+        Extract transcript text for the given segment IDs or time range.
+        """
+        if not transcript_segments:
+            return ""
+        
+        relevant_segments = []
+        
+        if segment_ids:
+            # Use explicit segment IDs
+            for i, seg in enumerate(transcript_segments):
+                if i in segment_ids or seg.get("id") in segment_ids:
+                    relevant_segments.append(seg)
+        elif timestamp_start is not None and timestamp_end is not None:
+            # Use time range
+            for seg in transcript_segments:
+                seg_start = seg.get("start", 0)
+                seg_end = seg.get("end", seg_start)
+                # Check for overlap
+                if seg_start <= timestamp_end and seg_end >= timestamp_start:
+                    relevant_segments.append(seg)
+        else:
+            # No filtering, use all segments
+            relevant_segments = transcript_segments
+        
+        # Build transcript text
+        lines = []
+        for seg in relevant_segments:
+            speaker = seg.get("speaker", "Unknown")
+            text = seg.get("text", "")
+            lines.append(f"{speaker}: {text}")
+        
+        return "\n".join(lines)
+    
+    def _build_agent_action_output(self, row: Dict[str, Any], is_false_positive: bool) -> Dict[str, Any]:
+        """Build training output for agent_action segment type."""
+        if is_false_positive:
+            return {
+                "action_detected": False,
+                "action_type": None,
+                "quality_impact": "none",
+                "explanation": "No significant agent action at this point",
+            }
+        
+        return {
+            "action_detected": True,
+            "action_type": row.get("segment_key", "").split("-")[1] if row.get("segment_key") else "unknown",
+            "quality_impact": row.get("trainer_assessment") or row.get("ai_assessment"),
+            "timestamp_start": row.get("timestamp_start"),
+            "timestamp_end": row.get("timestamp_end"),
+        }
+    
+    def _build_score_impact_output(self, row: Dict[str, Any], is_false_positive: bool) -> Dict[str, Any]:
+        """Build training output for score_impact segment type."""
+        if is_false_positive:
+            return {
+                "has_score_impact": False,
+                "impact_zone": None,
+                "explanation": "No score impact at this point",
+            }
+        
+        # Map trainer assessment to zone
+        assessment = row.get("trainer_assessment") or row.get("ai_assessment")
+        return {
+            "has_score_impact": True,
+            "impact_zone": assessment,  # Excellent, Good, Satisfactory, Below Average, Poor
+            "timestamp_start": row.get("timestamp_start"),
+            "timestamp_end": row.get("timestamp_end"),
+        }
+    
+    def _build_compliance_flag_output(self, row: Dict[str, Any], is_false_positive: bool) -> Dict[str, Any]:
+        """Build training output for compliance_flag segment type."""
+        if is_false_positive:
+            return {
+                "compliance_issue": False,
+                "flag_type": None,
+                "explanation": "No compliance issue at this point",
+            }
+        
+        return {
+            "compliance_issue": True,
+            "flag_type": row.get("segment_key", "").split("-")[1] if row.get("segment_key") else "unknown",
+            "severity": "high" if row.get("trainer_assessment") == "disagree" else "medium",
+            "timestamp_start": row.get("timestamp_start"),
+            "timestamp_end": row.get("timestamp_end"),
+        }
     
     def format_for_training(self, samples: List[Dict[str, Any]], tokenizer) -> "Dataset":
         """
         Format training samples into tokenized dataset.
         
         Uses chat template format for instruction fine-tuning.
+        Applies sample weights for balanced training (0.5 for agreements, 1.0 for corrections).
         """
         formatted = []
         
         system_prompt = """You are an expert call analyst for Angel Fulfilment Services.
 Analyse the call transcript and provide structured analysis in JSON format.
-Be accurate with sentiment scores (1-10) and quality scores (0-100)."""
+Be accurate with sentiment scores (1-10) and quality scores (0-100).
+Identify agent actions, score impacts, and compliance issues with precise timestamps."""
         
         for sample in samples:
+            user_prompt = self._build_segment_prompt(sample)
+            
             messages = [
                 {"role": "system", "content": system_prompt},
-                {"role": "user", "content": f"Analyse this call transcript:\n\n{sample['transcript']}"},
+                {"role": "user", "content": user_prompt},
                 {"role": "assistant", "content": json.dumps(sample['analysis'], indent=2)},
             ]
             
             # Apply chat template
             text = tokenizer.apply_chat_template(messages, tokenize=False)
-            formatted.append({"text": text})
+            formatted.append({
+                "text": text,
+                "weight": sample.get("weight", 1.0),
+            })
         
         dataset = Dataset.from_list(formatted)
         
         # Tokenize
         def tokenize_function(examples):
-            return tokenizer(
+            tokenized = tokenizer(
                 examples["text"],
                 truncation=True,
                 max_length=4096,
                 padding="max_length",
             )
+            # Preserve weight for weighted loss
+            tokenized["weight"] = examples["weight"]
+            return tokenized
         
         tokenized = dataset.map(tokenize_function, batched=True, remove_columns=["text"])
         return tokenized
+    
+    def _build_segment_prompt(self, sample: Dict[str, Any]) -> str:
+        """Build a segment-specific prompt for Dojo training samples."""
+        segment_type = sample.get("segment_type")
+        transcript = sample.get("transcript", "")
+        
+        if segment_type == "agent_action":
+            return f"""Analyse this call segment for AGENT ACTIONS.
+Identify any actions taken by the agent and assess their impact on call quality.
+
+Segment:
+{transcript}
+
+Provide your analysis in JSON format with: action_detected, action_type, quality_impact, explanation."""
+        
+        elif segment_type == "score_impact":
+            return f"""Analyse this call segment for SCORE IMPACT.
+Determine if this segment impacts the call quality score and rate the zone.
+
+Segment:
+{transcript}
+
+Provide your analysis in JSON format with: has_score_impact, impact_zone (Excellent/Good/Satisfactory/Below Average/Poor), explanation."""
+        
+        elif segment_type == "compliance_flag":
+            return f"""Analyse this call segment for COMPLIANCE ISSUES.
+Identify any regulatory or policy compliance concerns.
+
+Segment:
+{transcript}
+
+Provide your analysis in JSON format with: compliance_issue, flag_type, severity, explanation."""
+        
+        else:
+            return f"Analyse this call transcript:\n\n{transcript}"
     
     def train(
         self,
@@ -542,6 +733,25 @@ Be accurate with sentiment scores (1-10) and quality scores (0-100)."""
         manifest_path = self.adapter_base_path / "current.json"
         with open(manifest_path, "w") as f:
             json.dump(manifest, f, indent=2)
+        
+        # Create 'current' symlink for vLLM static loading
+        # This allows vLLM to load adapters at startup with --lora-modules
+        symlink_path = self.adapter_base_path / "current"
+        version_path = self.adapter_base_path / version
+        
+        # Remove existing symlink if present
+        if symlink_path.exists() or symlink_path.is_symlink():
+            try:
+                symlink_path.unlink()
+            except Exception as e:
+                logger.warning(f"Could not remove old symlink: {e}")
+        
+        # Create new symlink
+        try:
+            symlink_path.symlink_to(version_path, target_is_directory=True)
+            logger.info(f"Created symlink: current -> {version}")
+        except Exception as e:
+            logger.warning(f"Could not create symlink (may require admin on Windows): {e}")
         
         logger.info(f"Set current version to: {version}")
     
