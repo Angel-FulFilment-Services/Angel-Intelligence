@@ -19,6 +19,7 @@ from .sql_agent import (
     DATABASE_SCHEMA,
     SQL_AGENT_FUNCTIONS,
 )
+from .live_session import LiveSession, LiveSessionManager, CanvasUpdate, TranscriptSegment
 
 def get_analysis_service():
     """Lazy import for AnalysisService."""
@@ -46,4 +47,8 @@ __all__ = [
     "get_sql_agent_system_prompt",
     "DATABASE_SCHEMA",
     "SQL_AGENT_FUNCTIONS",
+    "LiveSession",
+    "LiveSessionManager",
+    "CanvasUpdate",
+    "TranscriptSegment",
 ]

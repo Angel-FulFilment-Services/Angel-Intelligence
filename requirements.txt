@@ -84,3 +84,8 @@ git+https://github.com/m-bain/whisperx.git
 # Optional: Speaker Diarisation (requires HuggingFace token)
 # ------------------------------------------------------------------------------
 # pyannote.audio==3.1.0
+
+# ------------------------------------------------------------------------------
+# RealtimeSTT - Live Speech Recognition
+# ------------------------------------------------------------------------------
+pip install RealtimeSTT

@@ -12,6 +12,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from src.config import get_settings
 from src.api.routes import router
+from src.api.routes_live import router as live_router
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +69,13 @@ def create_app() -> FastAPI:
     # Include API routes at /api/v1
     app.include_router(router, prefix="/api/v1")
     
+    # Include live session WebSocket routes
+    app.include_router(live_router, prefix="/api/v1")
+    
     # Also include at root for backwards compatibility
     # Frontend may use either /api/v1/... or /... paths
     app.include_router(router)
+    app.include_router(live_router)
     
     return app
 

@@ -1270,3 +1270,164 @@ class ClientConfig:
         if config and "mode" in config:
             return config["mode"]
         return None
+
+
+# ============================================================================
+# Live Meeting Session Model
+# ============================================================================
+
+@dataclass
+class LiveMeeting:
+    """
+    Model for ai_live_meetings table.
+    
+    Stores completed live meeting sessions with transcripts and analysis.
+    """
+    id: Optional[int] = None
+    session_id: str = ""
+    title: Optional[str] = None
+    host_name: Optional[str] = None
+    host_email: Optional[str] = None
+    start_time: Optional[datetime] = None
+    end_time: Optional[datetime] = None
+    duration_seconds: int = 0
+    participant_count: int = 0
+    transcript: Optional[str] = None
+    summary: Optional[str] = None
+    action_items: Optional[str] = None  # JSON array
+    decisions: Optional[str] = None  # JSON array
+    topics: Optional[str] = None  # JSON array
+    canvas_state: Optional[str] = None  # Full canvas JSON
+    created_at: Optional[datetime] = None
+    
+    @classmethod
+    def from_row(cls, row: Dict[str, Any]) -> "LiveMeeting":
+        """Create LiveMeeting from database row."""
+        return cls(
+            id=row.get("id"),
+            session_id=row.get("session_id", ""),
+            title=row.get("title"),
+            host_name=row.get("host_name"),
+            host_email=row.get("host_email"),
+            start_time=row.get("start_time"),
+            end_time=row.get("end_time"),
+            duration_seconds=row.get("duration_seconds", 0),
+            participant_count=row.get("participant_count", 0),
+            transcript=row.get("transcript"),
+            summary=row.get("summary"),
+            action_items=row.get("action_items"),
+            decisions=row.get("decisions"),
+            topics=row.get("topics"),
+            canvas_state=row.get("canvas_state"),
+            created_at=row.get("created_at"),
+        )
+    
+    def get_action_items_list(self) -> List[str]:
+        """Get action items as a list."""
+        if self.action_items:
+            try:
+                return json.loads(self.action_items)
+            except json.JSONDecodeError:
+                return []
+        return []
+    
+    def get_decisions_list(self) -> List[str]:
+        """Get decisions as a list."""
+        if self.decisions:
+            try:
+                return json.loads(self.decisions)
+            except json.JSONDecodeError:
+                return []
+        return []
+    
+    def get_topics_list(self) -> List[str]:
+        """Get topics as a list."""
+        if self.topics:
+            try:
+                return json.loads(self.topics)
+            except json.JSONDecodeError:
+                return []
+        return []
+    
+    def to_dict(self) -> Dict[str, Any]:
+        """Convert to dictionary for API responses."""
+        return {
+            "id": self.id,
+            "session_id": self.session_id,
+            "title": self.title,
+            "host_name": self.host_name,
+            "host_email": self.host_email,
+            "start_time": self.start_time.isoformat() if self.start_time else None,
+            "end_time": self.end_time.isoformat() if self.end_time else None,
+            "duration_seconds": self.duration_seconds,
+            "participant_count": self.participant_count,
+            "transcript": self.transcript,
+            "summary": self.summary,
+            "action_items": self.get_action_items_list(),
+            "decisions": self.get_decisions_list(),
+            "topics": self.get_topics_list(),
+            "created_at": self.created_at.isoformat() if self.created_at else None,
+        }
+    
+    @staticmethod
+    def save(meeting: "LiveMeeting") -> int:
+        """Save a live meeting to the database. Returns the ID."""
+        db = get_db_connection()
+        
+        cursor = db.execute("""
+            INSERT INTO ai_live_meetings (
+                session_id, title, host_name, host_email,
+                start_time, end_time, duration_seconds, participant_count,
+                transcript, summary, action_items, decisions, topics, canvas_state
+            ) VALUES (
+                %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s
+            )
+        """, (
+            meeting.session_id,
+            meeting.title,
+            meeting.host_name,
+            meeting.host_email,
+            meeting.start_time,
+            meeting.end_time,
+            meeting.duration_seconds,
+            meeting.participant_count,
+            meeting.transcript,
+            meeting.summary,
+            meeting.action_items,
+            meeting.decisions,
+            meeting.topics,
+            meeting.canvas_state,
+        ))
+        
+        return cursor.lastrowid
+    
+    @staticmethod
+    def get_by_session_id(session_id: str) -> Optional["LiveMeeting"]:
+        """Get a live meeting by session ID."""
+        db = get_db_connection()
+        row = db.fetch_one(
+            "SELECT * FROM ai_live_meetings WHERE session_id = %s",
+            (session_id,)
+        )
+        return LiveMeeting.from_row(row) if row else None
+    
+    @staticmethod
+    def get_recent(limit: int = 20, host_email: Optional[str] = None) -> List["LiveMeeting"]:
+        """Get recent live meetings."""
+        db = get_db_connection()
+        
+        if host_email:
+            rows = db.fetch_all("""
+                SELECT * FROM ai_live_meetings 
+                WHERE host_email = %s
+                ORDER BY end_time DESC 
+                LIMIT %s
+            """, (host_email, limit))
+        else:
+            rows = db.fetch_all("""
+                SELECT * FROM ai_live_meetings 
+                ORDER BY end_time DESC 
+                LIMIT %s
+            """, (limit,))
+        
+        return [LiveMeeting.from_row(row) for row in rows]
