@@ -1,111 +1,142 @@
-# Nightly Training CronJob
-# Runs at 2 AM each night to fine-tune the analysis model on new annotations
+# =============================================================================
+# PULSE CALL INTELLIGENCE - TRAINING CRONJOB
+# =============================================================================
+# Runs nightly training to fine-tune the call analysis model with new
+# human-corrected annotations from the ai_call_annotations table
 #
 # Prerequisites:
-# - Annotations in ai_call_annotations table
-# - NFS share mounted at /models
-# - GPU available for training
+# - ai_call_annotations table with human corrections
+# - Model storage PVC mounted at /models with read/write access
+# - Base model (Qwen2.5-72B-Instruct-AWQ) available at /models/
+# - Training runs on CPU using 4-bit quantization (no GPU required)
+#
+# Output:
+# - Versioned LoRA adapters saved to /models/adapters/call-analysis/{version}/
+# - current.json manifest updated to point to new version
+# - 'current' symlink created for vLLM static loading
 #
 # Usage: kubectl apply -f training-cronjob.yaml
+# =============================================================================
 
+---
 apiVersion: batch/v1
 kind: CronJob
 metadata:
-  name: angel-intelligence-training
-  namespace: default
+  name: model-training
+  namespace: pulse
   labels:
-    app: angel-intelligence
+    app: model-training
     component: training
 spec:
-  # Run at 2 AM every night
+  # Schedule: Daily at 2:00 AM UTC
   schedule: "0 2 * * *"
   
-  # Don't run concurrent training jobs
+  # Concurrency policy: Don't start new job if previous still running
   concurrencyPolicy: Forbid
   
-  # Keep last 3 job histories
+  # Keep last 3 successful and 3 failed jobs for debugging
   successfulJobsHistoryLimit: 3
   failedJobsHistoryLimit: 3
   
-  # Allow 30 min delay if cluster is busy
-  startingDeadlineSeconds: 1800
+  # Allow job to run for up to 2 hours before timing out
+  startingDeadlineSeconds: 7200
   
   jobTemplate:
+    metadata:
+      labels:
+        app: model-training
+        component: training
     spec:
-      # Timeout after 4 hours
-      activeDeadlineSeconds: 14400
+      # Allow 90 minutes for training to complete
+      activeDeadlineSeconds: 5400
       
-      # Don't retry on failure
+      # Don't retry on failure - let next cron run handle it
       backoffLimit: 0
       
       template:
         metadata:
           labels:
-            app: angel-intelligence
+            app: model-training
             component: training
         spec:
           restartPolicy: Never
           
+          # Use gateway or worker nodes (not Thor - don't compete with vLLM)
+          nodeSelector:
+            kubernetes.io/arch: arm64
+          
+          affinity:
+            # Prefer non-GPU nodes since training uses 4-bit CPU mode
+            nodeAffinity:
+              preferredDuringSchedulingIgnoredDuringExecution:
+                - weight: 100
+                  preference:
+                    matchExpressions:
+                      - key: nvidia.com/gpu.product
+                        operator: DoesNotExist
+          
           containers:
-            - name: trainer
-              image: angel-intelligence:latest
-              imagePullPolicy: IfNotPresent
+            - name: training
+              # Use main application image which has training dependencies
+              image: pulse-call-intelligence:latest
+              imagePullPolicy: Always
               
-              # Run the training script
-              command: ["python", "-m", "src.services.trainer"]
+              command:
+                - python
+                - -m
+                - src.services.trainer
               
               env:
                 # Database connection
-                - name: AI_DB_HOST
-                  valueFrom:
-                    secretKeyRef:
-                      name: angel-intelligence-secrets
-                      key: db-host
-                - name: AI_DB_PORT
-                  valueFrom:
-                    secretKeyRef:
-                      name: angel-intelligence-secrets
-                      key: db-port
-                - name: AI_DB_DATABASE
-                  valueFrom:
-                    secretKeyRef:
-                      name: angel-intelligence-secrets
-                      key: db-database
-                - name: AI_DB_USERNAME
-                  valueFrom:
-                    secretKeyRef:
-                      name: angel-intelligence-secrets
-                      key: db-username
-                - name: AI_DB_PASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: angel-intelligence-secrets
-                      key: db-password
-                
-                # HuggingFace token
-                - name: HUGGINGFACE_TOKEN
-                  valueFrom:
-                    secretKeyRef:
-                      name: angel-intelligence-secrets
-                      key: huggingface-token
-                
-                # Model configuration
-                - name: ANALYSIS_MODEL
+                - name: DB_HOST
                   valueFrom:
                     configMapKeyRef:
-                      name: angel-intelligence-thor-config
-                      key: analysis-model
-                - name: ANALYSIS_MODEL_PATH
+                      name: pulse-config
+                      key: DB_HOST
+                - name: DB_PORT
                   valueFrom:
                     configMapKeyRef:
-                      name: angel-intelligence-thor-config
-                      key: analysis-model-path
+                      name: pulse-config
+                      key: DB_PORT
+                - name: DB_NAME
+                  valueFrom:
+                    configMapKeyRef:
+                      name: pulse-config
+                      key: DB_NAME
+                - name: DB_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: pulse-secrets
+                      key: DB_USER
+                - name: DB_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: pulse-secrets
+                      key: DB_PASSWORD
+                
+                # Model paths
                 - name: MODELS_BASE_PATH
                   value: "/models"
                 
-                # Training environment
-                - name: CUDA_VISIBLE_DEVICES
-                  value: "0"
+                # HuggingFace token for model downloads
+                - name: HUGGING_FACE_HUB_TOKEN
+                  valueFrom:
+                    secretKeyRef:
+                      name: pulse-secrets
+                      key: huggingface-token
+                      optional: true
+                
+                # Training configuration
+                - name: ADAPTER_NAME
+                  value: "call-analysis"
+                - name: BASE_MODEL_PATH
+                  value: "/models/Qwen2.5-72B-Instruct-AWQ"
+                
+                # Minimum annotations required to trigger training
+                - name: MIN_NEW_ANNOTATIONS
+                  value: "50"
+                
+                # Cache directories
                 - name: TRANSFORMERS_CACHE
                   value: "/models/.cache"
                 - name: HF_HOME
@@ -113,32 +144,42 @@ spec:
               
               resources:
                 requests:
-                  memory: "32Gi"
                   cpu: "4"
-                  nvidia.com/gpu: "1"
+                  memory: "16Gi"
                 limits:
-                  memory: "64Gi"
                   cpu: "8"
-                  nvidia.com/gpu: "1"
+                  memory: "24Gi"
               
               volumeMounts:
-                - name: models
+                # Model storage - needs read/write for saving adapters
+                - name: model-storage
                   mountPath: /models
+                
+                # Optional: Mount training lock to shared location
+                - name: shared-storage
+                  mountPath: /app/data
           
           volumes:
-            - name: models
+            # Shared model storage (NFS or PVC)
+            - name: model-storage
               persistentVolumeClaim:
-                claimName: angel-intelligence-thor-models
-          
-          # Prefer Thor nodes for training
-          nodeSelector:
-            nvidia.com/gpu.present: "true"
-          
-          tolerations:
-            - key: nvidia.com/gpu
-              operator: Exists
-              effect: NoSchedule
+                claimName: model-storage-pvc
+            
+            # Shared storage for training locks
+            - name: shared-storage
+              persistentVolumeClaim:
+                claimName: shared-storage-pvc
 
 ---
-# Manual training job (for one-off runs)
-# kubectl create job --from=cronjob/angel-intelligence-training manual-training-$(date +%Y%m%d)
+# =============================================================================
+# MANUAL TRAINING JOB TEMPLATE
+# =============================================================================
+# To trigger training manually (outside of cron schedule):
+#
+# kubectl create job --from=cronjob/model-training manual-training-$(date +%Y%m%d-%H%M)
+#
+# Or use the API endpoint:
+# curl -X POST http://api.pulse.local/api/training/start \
+#   -H "Authorization: Bearer $TOKEN" \
+#   -d '{"force": true, "epochs": 3, "max_samples": 1000}'
+# =============================================================================

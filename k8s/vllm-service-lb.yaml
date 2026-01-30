@@ -1,0 +1,274 @@
+# =============================================================================
+# PULSE CALL INTELLIGENCE - vLLM SERVICE LOAD BALANCING
+# =============================================================================
+# This configuration provides load balancing across 2x vLLM instances on Thor
+# Using Kubernetes native service load balancing with session affinity options
+# =============================================================================
+
+---
+# -----------------------------------------------------------------------------
+# vLLM DEPLOYMENT - 2 REPLICAS
+# -----------------------------------------------------------------------------
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-server
+  namespace: pulse
+  labels:
+    app: vllm
+    component: inference
+spec:
+  replicas: 2  # 2x vLLM instances for load balancing
+  selector:
+    matchLabels:
+      app: vllm
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0  # Never lose capacity during updates
+  template:
+    metadata:
+      labels:
+        app: vllm
+        component: inference
+    spec:
+      nodeSelector:
+        kubernetes.io/arch: arm64
+        nvidia.com/gpu.product: "Thor"  # Pin to Thor nodes only
+      
+      # Anti-affinity to spread pods across Thor nodes (if multiple)
+      affinity:
+        podAntiAffinity:
+          preferredDuringSchedulingIgnoredDuringExecution:
+            - weight: 100
+              podAffinityTerm:
+                labelSelector:
+                  matchLabels:
+                    app: vllm
+                topologyKey: kubernetes.io/hostname
+      
+      containers:
+        - name: vllm
+          image: vllm/vllm-openai:latest
+          args:
+            - "--model"
+            - "/models/Qwen2.5-72B-Instruct-AWQ"
+            - "--quantization"
+            - "awq"
+            - "--dtype"
+            - "float16"
+            - "--max-model-len"
+            - "32768"
+            - "--gpu-memory-utilization"
+            - "0.45"  # ~40GB per instance (45% of 90GB available)
+            - "--enable-lora"
+            - "--lora-modules"
+            - "call-analysis=/models/adapters/call-analysis/current"
+            - "--max-loras"
+            - "4"
+            - "--max-lora-rank"
+            - "64"
+            - "--host"
+            - "0.0.0.0"
+            - "--port"
+            - "8000"
+          
+          ports:
+            - containerPort: 8000
+              name: http
+              protocol: TCP
+          
+          resources:
+            requests:
+              memory: "40Gi"
+              nvidia.com/gpu: "1"  # Each pod gets portion of unified memory
+            limits:
+              memory: "45Gi"
+              nvidia.com/gpu: "1"
+          
+          # Health checks for load balancer
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120  # Model loading takes time
+            periodSeconds: 10
+            timeoutSeconds: 5
+            successThreshold: 1
+            failureThreshold: 3
+          
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            timeoutSeconds: 10
+            failureThreshold: 3
+          
+          # Graceful shutdown for in-flight requests
+          lifecycle:
+            preStop:
+              exec:
+                command: ["/bin/sh", "-c", "sleep 30"]
+          
+          volumeMounts:
+            - name: model-storage
+              mountPath: /models
+              readOnly: true
+            - name: lora-adapters
+              mountPath: /lora-adapters
+              readOnly: true
+            - name: shm
+              mountPath: /dev/shm
+      
+      terminationGracePeriodSeconds: 60
+      
+      volumes:
+        - name: model-storage
+          persistentVolumeClaim:
+            claimName: model-storage-pvc
+        - name: lora-adapters
+          persistentVolumeClaim:
+            claimName: lora-adapters-pvc
+        - name: shm
+          emptyDir:
+            medium: Memory
+            sizeLimit: 16Gi
+
+---
+# -----------------------------------------------------------------------------
+# VLLM CLUSTER SERVICE - Internal Load Balancing
+# -----------------------------------------------------------------------------
+# ClusterIP service for internal K8s communication
+# Kubernetes automatically load balances across healthy pods
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-service
+  namespace: pulse
+  labels:
+    app: vllm
+  annotations:
+    # Optional: Enable topology-aware routing for latency optimization
+    service.kubernetes.io/topology-mode: Auto
+spec:
+  type: ClusterIP
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      protocol: TCP
+  
+  # Session affinity options (choose one based on your needs):
+  
+  # OPTION 1: Round-robin (default) - Best for batch processing
+  sessionAffinity: None
+  
+  # OPTION 2: Client IP affinity - Keeps same client on same pod
+  # Useful for streaming/long connections
+  # sessionAffinity: ClientIP
+  # sessionAffinityConfig:
+  #   clientIP:
+  #     timeoutSeconds: 3600  # 1 hour sticky sessions
+
+---
+# -----------------------------------------------------------------------------
+# VLLM NODEPORT SERVICE - External Access
+# -----------------------------------------------------------------------------
+# NodePort for external nodes to access vLLM
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-external
+  namespace: pulse
+  labels:
+    app: vllm
+spec:
+  type: NodePort
+  selector:
+    app: vllm
+  ports:
+    - name: http
+      port: 8000
+      targetPort: 8000
+      nodePort: 30800  # External access on all nodes at :30800
+      protocol: TCP
+  
+  # For external access, typically use round-robin
+  sessionAffinity: None
+
+---
+# -----------------------------------------------------------------------------
+# HORIZONTAL POD AUTOSCALER (Optional)
+# -----------------------------------------------------------------------------
+# Automatically scales vLLM pods based on GPU/CPU utilization
+# Note: On single Thor, this would scale within memory limits
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: vllm-hpa
+  namespace: pulse
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: vllm-server
+  minReplicas: 2
+  maxReplicas: 2  # Fixed at 2 for Thor 128GB (2x 40GB models)
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 80
+    # Custom GPU metrics if DCGM exporter is installed:
+    # - type: Pods
+    #   pods:
+    #     metric:
+    #       name: DCGM_FI_DEV_GPU_UTIL
+    #     target:
+    #       type: AverageValue
+    #       averageValue: "80"
+
+---
+# -----------------------------------------------------------------------------
+# POD DISRUPTION BUDGET
+# -----------------------------------------------------------------------------
+# Ensures at least 1 vLLM pod is always available during updates
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: vllm-pdb
+  namespace: pulse
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: vllm
+
+---
+# -----------------------------------------------------------------------------
+# CONFIGMAP - vLLM Settings
+# -----------------------------------------------------------------------------
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vllm-config
+  namespace: pulse
+data:
+  # Load balancing behavior for workers
+  VLLM_URL: "http://vllm-service:8000/v1"
+  
+  # Retry configuration for workers
+  VLLM_MAX_RETRIES: "3"
+  VLLM_RETRY_DELAY: "1.0"
+  VLLM_TIMEOUT: "120"
+  
+  # Connection pool settings
+  VLLM_POOL_SIZE: "10"
+  VLLM_POOL_MAXSIZE: "20"
