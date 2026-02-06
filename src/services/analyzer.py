@@ -17,7 +17,13 @@ import time
 import uuid
 from typing import Dict, Any, List, Optional
 
-import torch
+# PyTorch is optional - workers call LLM service via HTTP
+TORCH_AVAILABLE = False
+try:
+    import torch
+    TORCH_AVAILABLE = True
+except ImportError:
+    pass
 
 from src.config import get_settings
 from src.database.models import calculate_quality_score, get_quality_zone
@@ -104,8 +110,11 @@ class AnalysisService:
         self.analysis_mode = settings.analysis_mode  # 'audio' or 'transcript'
         self.use_mock = settings.use_mock_models
         
-        # Device configuration
-        self.device = "cuda" if torch.cuda.is_available() and settings.use_gpu else "cpu"
+        # Device configuration - only check CUDA if torch is available
+        if TORCH_AVAILABLE:
+            self.device = "cuda" if torch.cuda.is_available() and settings.use_gpu else "cpu"
+        else:
+            self.device = "cpu"
         
         # Quantization setting
         self.quantization = settings.analysis_model_quantization  # 'int4', 'int8', or ''
@@ -651,7 +660,7 @@ class AnalysisService:
             
             # Force garbage collection and clear CUDA cache
             gc.collect()
-            if torch.cuda.is_available():
+            if TORCH_AVAILABLE and torch.cuda.is_available():
                 torch.cuda.empty_cache()
     
     def _analyse_audio_via_api(
@@ -953,7 +962,7 @@ Return ONLY valid JSON - no text before or after."""
             
             # Force garbage collection and clear CUDA cache
             gc.collect()
-            if torch.cuda.is_available():
+            if TORCH_AVAILABLE and torch.cuda.is_available():
                 torch.cuda.empty_cache()
     
     def _generate_text_only_response(self, prompt: str) -> str:
