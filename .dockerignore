@@ -1,0 +1,82 @@
+# Git
+.git
+.gitignore
+
+# Python
+__pycache__
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg-info/
+.eggs/
+dist/
+build/
+*.egg
+
+# Virtual environments
+venv/
+.venv/
+env/
+.env
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# Models and large files (use volume mounts instead)
+models/
+*.bin
+*.safetensors
+*.gguf
+*.pt
+*.pth
+*.onnx
+
+# Logs and temp files
+logs/
+*.log
+tmp/
+temp/
+
+# Documentation (not needed in container)
+documentation/
+docs/
+*.md
+!README.md
+
+# Call recordings (data, not code)
+call-recordings/
+
+# vLLM source (not needed in container)
+vllm/
+
+# Kubernetes manifests (not needed in container)
+k8s/
+
+# Scripts (not needed in container)
+scripts/
+
+# Development files
+.env*
+*.local
+docker-compose*.yml
+Dockerfile*
+
+# Test files
+tests/
+test_*.py
+*_test.py
+
+# Cache directories
+.cache/
+.huggingface/

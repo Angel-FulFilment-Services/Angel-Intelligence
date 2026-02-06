@@ -172,12 +172,25 @@ def main():
     logger.info("=" * 60)
     logger.info(f"Environment: {settings.angel_env}")
     logger.info(f"Worker ID: {settings.worker_id}")
+    logger.info(f"Worker Mode: {settings.worker_mode}")
     logger.info(f"Log level: {settings.log_level}")
     logger.info(f"Analysis mode: {settings.analysis_mode}")
     logger.info(f"Mock mode: {settings.use_mock_models}")
     logger.info("=" * 60)
     
-    # Create and run worker
+    # Interactive mode: Don't poll batch queue, just wait for API requests
+    if settings.worker_mode == "interactive":
+        logger.info("Interactive mode: Waiting for API requests (not polling batch queue)")
+        logger.info("Interactive workers should run the API server, not this worker script")
+        logger.info("Use: python -m uvicorn src.api.app:app --host 0.0.0.0 --port 8000")
+        # Keep running but do nothing - the pod should run the API instead
+        import time
+        while True:
+            time.sleep(60)
+            logger.debug("Interactive worker idle (no batch processing)")
+        return
+    
+    # Create and run worker (batch mode)
     worker = Worker()
     worker.run()
 

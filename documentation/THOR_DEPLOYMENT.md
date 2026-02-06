@@ -460,9 +460,11 @@ Angel Intelligence uses modular Dockerfiles for minimal image sizes:
 
 | Dockerfile | Pod | Size | Description |
 |------------|-----|------|-------------|
-| `Dockerfile.worker-jetson` | Worker | ~400MB | HTTP orchestrator |
+| `Dockerfile.worker-jetson` | Batch & Interactive Workers | ~400MB | HTTP orchestrator (same image, different WORKER_MODE) |
 | `Dockerfile.transcription-jetson` | Transcription | ~4GB | WhisperX + pyannote |
 | `Dockerfile.api` | API | ~200MB | API gateway |
+
+> **Note:** Batch and Interactive workers use the **same Docker image**. The difference is the `WORKER_MODE` environment variable (`batch` vs `interactive`) set in the Kubernetes deployment.
 
 **Build and push to local registry:**
 
@@ -474,12 +476,13 @@ export REGISTRY_IP=$(hostname -I | awk '{print $1}')
 docker buildx create --use --name multiarch 2>/dev/null || docker buildx use multiarch
 
 # Build Worker image (ARM64 for Thor)
-# Use --load to load locally, then push with docker push (respects insecure registry config)
+# This single image is used for BOTH batch and interactive workers
+# The WORKER_MODE env var in k8s deployment determines behavior
 docker buildx build --platform linux/arm64 \
   -f Dockerfile.worker-jetson \
   -t ${REGISTRY_IP}:5000/angel-intelligence:worker-arm64 \
   --load .
-docker push ${REGISTRY_IP}:5000/angel-intelligence:worker-arm64 # HERE
+docker push ${REGISTRY_IP}:5000/angel-intelligence:worker-arm64
 
 # Build Transcription image (ARM64 for Thor)
 docker buildx build --platform linux/arm64 \
@@ -508,7 +511,7 @@ Update image references in your deployment YAML files to use the local registry:
 # k8s/vllm-deployment.yaml - vLLM server
 image: CONTROL_PLANE_IP:5000/angel-intelligence:vllm-arm64
 
-# k8s/thor-deployment.yaml - Worker pods  
+# k8s/thor-deployment.yaml - Batch AND Interactive Worker pods (same image!)
 image: CONTROL_PLANE_IP:5000/angel-intelligence:worker-arm64
 
 # k8s/transcription-deployment.yaml - Transcription pods
@@ -518,37 +521,17 @@ image: CONTROL_PLANE_IP:5000/angel-intelligence:transcription-arm64
 image: CONTROL_PLANE_IP:5000/angel-intelligence:api
 ```
 
+> **Note:** Both `angel-intelligence-thor-batch` and `angel-intelligence-thor-interactive` deployments use the same `worker-arm64` image. The `WORKER_MODE` environment variable (`batch` or `interactive`) determines the worker behavior.
+
 When you deploy, K3s on Thor will automatically pull from the local registry.
 
 ---
 
 ## Phase 5: Deploy Services (In Order)
 
-### Step 5.1: Apply ConfigMap
+### Step 5.1: Deploy vLLM Server (First)
 
-Review and customise `k8s/thor-deployment.yaml` ConfigMap section:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: angel-intelligence-thor-config
-data:
-  # Update these for your environment
-  analysis-model: "Qwen/Qwen2.5-72B-Instruct-AWQ"
-  whisper-model: "large-v3"
-  pbx-live-url: "https://your-pbx.example.com/callrec/"
-  pbx-archive-url: "https://your-archive.example.com/"
-```
-
-Apply the full thor-deployment.yaml (this includes the ConfigMap):
-```bash
-kubectl apply -f k8s/thor-deployment.yaml
-```
-
-### Step 5.2: Deploy vLLM Server (First)
-
-The vLLM server provides shared LLM inference for all workers.
+The vLLM server must be running **before** workers start, as they connect to it.
 
 ```bash
 # Deploy vLLM
@@ -575,12 +558,10 @@ Expected output:
 }
 ```
 
-### Step 5.3: Deploy Transcription Service
-
-The transcription service provides shared WhisperX for all workers.
+### Step 5.2: Deploy Transcription Service
 
 ```bash
-# Deploy transcription pods (start with 1, scale up after verification)
+# Deploy transcription pods
 kubectl apply -f k8s/transcription-deployment.yaml
 
 # Wait for WhisperX model to load
@@ -599,30 +580,18 @@ Expected output:
 {"status": "healthy", "model_loaded": true}
 ```
 
-### Step 5.4: Update ConfigMap with Service URLs
+### Step 5.3: Deploy Thor Workers (ConfigMap + Workers)
 
-Now that services are running, update the thor-deployment ConfigMap:
-
-```bash
-kubectl edit configmap angel-intelligence-thor-config
-```
-
-Set:
-```yaml
-data:
-  llm-api-url: "http://vllm-server:8000/v1"
-  transcription-service-url: "http://transcription-service:8001"
-```
-
-Or apply with patch:
-```bash
-kubectl patch configmap angel-intelligence-thor-config -p '{"data":{"llm-api-url":"http://vllm-server:8000/v1"}}'
-```
-
-### Step 5.5: Deploy Workers
+Now that vLLM and transcription are running, deploy the workers:
 
 ```bash
-# Deploy batch and interactive workers
+# Review ConfigMap settings first
+# Edit k8s/thor-deployment.yaml if needed:
+#   - pbx-live-url
+#   - pbx-archive-url
+#   - Any other environment-specific values
+
+# Deploy ConfigMap, PVC, and workers
 kubectl apply -f k8s/thor-deployment.yaml
 
 # Check pods are starting

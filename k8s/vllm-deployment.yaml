@@ -20,15 +20,21 @@ metadata:
   name: vllm-config
   namespace: default
 data:
-  # Model - use AWQ pre-quantized version for vLLM
-  # The base model requires bitsandbytes which vLLM doesn't support
-  MODEL_NAME: "Qwen/Qwen2.5-32B-Instruct-AWQ"
+  # Model - use local path for offline mode
+  # Mounted from NFS at /exports/angel-models/analysis/Qwen2.5-72B-Instruct-AWQ
+  MODEL_NAME: "/models/analysis/Qwen2.5-72B-Instruct-AWQ"
+  
+  # Offline mode - no HuggingFace downloads
+  HF_HUB_OFFLINE: "1"
+  TRANSFORMERS_OFFLINE: "1"
   
   # Maximum model length (context window)
   MAX_MODEL_LEN: "8192"
   
   # GPU memory utilization (0.0-1.0)
-  GPU_MEMORY_UTILIZATION: "0.85"
+  # For 2 pods on Thor (128GB unified): 0.30 each = ~37GB per pod
+  # For 1 pod: can use 0.60 for more KV cache headroom
+  GPU_MEMORY_UTILIZATION: "0.30"
   
   # Number of tensor parallel GPUs (set higher if multi-GPU)
   TENSOR_PARALLEL_SIZE: "1"
@@ -79,15 +85,31 @@ spec:
       labels:
         app: vllm-server
     spec:
+      runtimeClassName: nvidia
+      
+      # Schedule on Thor nodes
+      nodeSelector:
+        nvidia.com/gpu.product: "AGX-Thor"
+      
       containers:
         - name: vllm
-          image: vllm/vllm-openai:latest
+          image: 192.168.9.50:5000/angel-intelligence:vllm-arm64
           ports:
             - containerPort: 8000
               name: http
           env:
             - name: HF_HOME
               value: "/models"
+            - name: HF_HUB_OFFLINE
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: HF_HUB_OFFLINE
+            - name: TRANSFORMERS_OFFLINE
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: TRANSFORMERS_OFFLINE
             - name: HUGGING_FACE_HUB_TOKEN
               valueFrom:
                 secretKeyRef:
@@ -138,6 +160,10 @@ spec:
                 configMapKeyRef:
                   name: vllm-config
                   key: LORA_MODULES_PATH
+          command:
+            - "python3"
+            - "-m"
+            - "vllm.entrypoints.openai.api_server"
           args:
             - "--model"
             - "$(MODEL_NAME)"
@@ -173,19 +199,27 @@ spec:
               memory: "32Gi"
               cpu: "8"
               nvidia.com/gpu: "1"
+          # Startup probe: allows model to load before liveness/readiness kick in
+          # 72B AWQ model can take 10-15 minutes to load on Thor
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 120  # 60s + (120 * 10s) = 21 minutes max startup
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 120  # Model loading takes time
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 30  # Allow 5 minutes for initial load
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 300
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 3
@@ -196,10 +230,10 @@ spec:
         # Adapters volume - shared with training job
         - name: adapters
           persistentVolumeClaim:
-            claimName: angel-intelligence-thor-models
-      # Prefer nodes with GPU
+            claimName: angel-intelligence-models
+      # Schedule on Thor node (has GPU)
       nodeSelector:
-        nvidia.com/gpu.present: "true"
+        nvidia.com/gpu.product: "AGX-Thor"
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists

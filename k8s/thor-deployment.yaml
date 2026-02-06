@@ -41,30 +41,31 @@ data:
   
   # Transcription - use large-v3 for best accuracy
   whisper-model: "large-v3"
-  whisper-model-path: "/models/whisper"
+  whisper-model-path: "/models/whisper/faster-whisper-large-v3"
   transcript-segmentation: "word"
   
-  # Analysis Model - 32B for high-quality output
-  analysis-model: "Qwen/Qwen2.5-32B-Instruct"
-  analysis-model-path: "/models/analysis"
-  analysis-model-quantization: "int4"
+  # Analysis Model - 72B AWQ for high-quality output
+  analysis-model: "Qwen/Qwen2.5-72B-Instruct-AWQ"
+  analysis-model-path: "/models/analysis/Qwen2.5-72B-Instruct-AWQ"
+  analysis-model-quantization: "awq"
   
-  # Chat Model - using same 32B via vLLM for consistency
+  # Chat Model - using same 72B AWQ via vLLM for consistency
   # When using vLLM, this is just the model name for API requests
-  chat-model: "Qwen/Qwen2.5-32B-Instruct"
-  chat-model-path: "/models/chat"
-  chat-model-quantization: "int4"
+  chat-model: "Qwen/Qwen2.5-72B-Instruct-AWQ"
+  chat-model-path: "/models/analysis/Qwen2.5-72B-Instruct-AWQ"
+  chat-model-quantization: "awq"
   
-  # vLLM API Server - set to use shared model server instead of local models
-  # Deploy vllm-deployment.yaml first, then set the URL:
-  # llm-api-url: "http://vllm-server:8000/v1"
-  llm-api-url: ""  # Empty = use local models
+  # vLLM API Server - shared model server for all workers
+  llm-api-url: "http://vllm-server:8000/v1"
   llm-api-key: ""  # Optional API key if vLLM requires auth
+  
+  # Transcription Service - shared WhisperX server
+  transcription-service-url: "http://transcription-service:8001"
   
   # LoRA adapter name for fine-tuned analysis (folder under /models/adapters/)
   analysis-adapter-name: "call-analysis"
   
-  # No transcript limit for 32B
+  # No transcript limit for 72B
   max-transcript-length: "0"
   
   # Worker mode
@@ -75,20 +76,20 @@ data:
   enable-pii-redaction: "true"
   
   # PBX Sources
-  pbx-live-url: "https://pbx.example.com/callrec/"
-  pbx-archive-url: "https://archive.example.com/"
+  pbx-live-url: "https://pbx.angelfs.co.uk/callrec/"
+  pbx-archive-url: "https://afs-pbx-callarchive.angelfs.co.uk/"
   
   # GPU
   cuda-visible-devices: "0"
   
-  # Hot reload disabled for stability
-  enable-model-hot-reload: "false"
+  # Hot reload enabled for LoRA adapter updates without pod restart
+  enable-model-hot-reload: "true"
 
 ---
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: angel-intelligence-thor-models
+  name: angel-intelligence-models
   namespace: default
   labels:
     app: angel-intelligence
@@ -96,7 +97,9 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: nfs-client
+  # Use existing manually-bound PV
+  storageClassName: ""
+  volumeName: angel-models-pv
   resources:
     requests:
       storage: 100Gi  # 32B + 14B + Whisper large + diarization
@@ -131,26 +134,31 @@ spec:
     spec:
       runtimeClassName: nvidia
       
+      # DNS resolution for internal hosts
+      hostAliases:
+        - ip: "192.168.5.13"
+          hostnames:
+            - "afs-db02.angelfs.co.uk"
+        - ip: "192.168.0.239"
+          hostnames:
+            - "pbx.angelfs.co.uk"
+        - ip: "192.168.5.32"
+          hostnames:
+            - "afs-pbx-callarchive.angelfs.co.uk"
+      
       # Schedule only on Thor nodes
       nodeSelector:
         nvidia.com/gpu.product: "AGX-Thor"
         # Or use a custom label:
         # angel.ai/tier: "thor"
       
-      # One worker per Thor node
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-          - labelSelector:
-              matchLabels:
-                app: angel-intelligence
-                tier: thor
-            topologyKey: kubernetes.io/hostname
+      # NOTE: Anti-affinity removed - workers are lightweight HTTP orchestrators
+      # and can run alongside vLLM/transcription pods on same Thor node
 
       containers:
       - name: worker
-        image: your-registry/angel-intelligence:latest
-        imagePullPolicy: Always
+        image: 192.168.9.50:5000/angel-intelligence:worker-arm64
+        imagePullPolicy: IfNotPresent
         
         command: ["python", "-m", "src.worker.worker"]
 
@@ -287,6 +295,11 @@ spec:
             configMapKeyRef:
               name: angel-intelligence-thor-config
               key: llm-api-key
+        - name: TRANSCRIPTION_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: transcription-service-url
         - name: ANALYSIS_ADAPTER_NAME
           valueFrom:
             configMapKeyRef:
@@ -324,12 +337,13 @@ spec:
               key: cuda-visible-devices
 
         resources:
+          # NOTE: GPU resource removed - workers use vLLM + transcription services via HTTP
+          # GPU is shared via runtimeClassName: nvidia
           limits:
-            nvidia.com/gpu: 1
-            memory: "120Gi"  # Leave headroom for system
+            memory: "8Gi"
           requests:
-            memory: "64Gi"
-            cpu: "8"
+            memory: "4Gi"
+            cpu: "2"
 
         volumeMounts:
         - name: models
@@ -349,145 +363,10 @@ spec:
       volumes:
       - name: models
         persistentVolumeClaim:
-          claimName: angel-intelligence-thor-models
+          claimName: angel-intelligence-models
       - name: model-cache
         emptyDir:
           sizeLimit: 20Gi
 
       restartPolicy: Always
       terminationGracePeriodSeconds: 300  # Allow current job to complete
-
----
-# =============================================================================
-# Thor Interactive Worker (Optional)
-# Dedicated worker for real-time chat/summary requests
-# =============================================================================
-apiVersion: apps/v1
-kind: Deployment
-metadata:
-  name: angel-intelligence-thor-interactive
-  namespace: default
-  labels:
-    app: angel-intelligence
-    component: interactive
-    tier: thor
-spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: angel-intelligence
-      component: interactive
-      tier: thor
-  template:
-    metadata:
-      labels:
-        app: angel-intelligence
-        component: interactive
-        tier: thor
-    spec:
-      runtimeClassName: nvidia
-      
-      nodeSelector:
-        nvidia.com/gpu.product: "AGX-Thor"
-
-      containers:
-      - name: interactive
-        image: your-registry/angel-intelligence:latest
-        imagePullPolicy: Always
-        
-        command: ["python", "-m", "src.worker.worker"]
-
-        env:
-        - name: ANGEL_ENV
-          value: "production"
-        - name: WORKER_ID
-          valueFrom:
-            fieldRef:
-              fieldPath: metadata.name
-        - name: WORKER_MODE
-          value: "interactive"
-        - name: PRELOAD_CHAT_MODEL
-          value: "true"
-
-        # Database (same secrets as batch)
-        - name: AI_DB_HOST
-          valueFrom:
-            secretKeyRef:
-              name: angel-intelligence-secrets
-              key: db-host
-        - name: AI_DB_PORT
-          valueFrom:
-            secretKeyRef:
-              name: angel-intelligence-secrets
-              key: db-port
-        - name: AI_DB_DATABASE
-          valueFrom:
-            secretKeyRef:
-              name: angel-intelligence-secrets
-              key: db-database
-        - name: AI_DB_USERNAME
-          valueFrom:
-            secretKeyRef:
-              name: angel-intelligence-secrets
-              key: db-username
-        - name: AI_DB_PASSWORD
-          valueFrom:
-            secretKeyRef:
-              name: angel-intelligence-secrets
-              key: db-password
-
-        # Chat model config
-        - name: CHAT_MODEL
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-thor-config
-              key: chat-model
-        - name: CHAT_MODEL_PATH
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-thor-config
-              key: chat-model-path
-        - name: CHAT_MODEL_QUANTIZATION
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-thor-config
-              key: chat-model-quantization
-        - name: LLM_API_URL
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-thor-config
-              key: llm-api-url
-        - name: LLM_API_KEY
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-thor-config
-              key: llm-api-key
-        - name: ANALYSIS_ADAPTER_NAME
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-thor-config
-              key: analysis-adapter-name
-
-        resources:
-          limits:
-            nvidia.com/gpu: 1
-            memory: "32Gi"  # 14B chat model only
-          requests:
-            memory: "16Gi"
-            cpu: "4"
-
-        volumeMounts:
-        - name: models
-          mountPath: /models
-        - name: model-cache
-          mountPath: /root/.cache
-
-      volumes:
-      - name: models
-        persistentVolumeClaim:
-          claimName: angel-intelligence-thor-models
-      - name: model-cache
-        emptyDir:
-          sizeLimit: 10Gi
-
-      restartPolicy: Always

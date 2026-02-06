@@ -108,7 +108,7 @@ spec:
 
       containers:
       - name: transcription
-        image: 192.168.9.50:30500/angel-intelligence:latest-arm64
+        image: 192.168.9.50:5000/angel-intelligence:transcription-arm64
         imagePullPolicy: IfNotPresent
         
         # LD_PRELOAD fixes ARM64 OpenMP TLS issue
@@ -123,7 +123,7 @@ spec:
         # Fix ARM64 OpenMP TLS issue
         - name: LD_PRELOAD
           value: "/usr/lib/aarch64-linux-gnu/libgomp.so.1"
-        # Use local models only - no HuggingFace downloads
+        # Use local models only - models pre-downloaded to NFS
         - name: HF_HUB_OFFLINE
           value: "1"
         - name: TRANSFORMERS_OFFLINE
@@ -140,6 +140,12 @@ spec:
           value: "api"
         - name: USE_GPU
           value: "true"
+        
+        # vLLM API for live session canvas updates (chat functionality)
+        - name: LLM_API_URL
+          value: "http://vllm-service:8000/v1"
+        - name: CHAT_MODEL
+          value: "Qwen/Qwen2.5-72B-Instruct-AWQ"
           
         # Whisper model settings
         - name: WHISPER_MODEL
@@ -147,11 +153,9 @@ spec:
             configMapKeyRef:
               name: transcription-config
               key: whisper-model
+        # Path to pre-downloaded faster-whisper model on NFS
         - name: WHISPER_MODEL_PATH
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-config
-              key: whisper-model-path
+          value: "/models/whisper/faster-whisper-large-v3"
         - name: TRANSCRIPT_SEGMENTATION
           valueFrom:
             configMapKeyRef:
@@ -166,9 +170,11 @@ spec:
               key: huggingface-token
 
         resources:
+          # NOTE: GPU resource removed to allow sharing with vLLM on Thor
+          # WhisperX will still use CUDA via runtimeClassName: nvidia
+          # Each model uses ~10GB VRAM (medium) which fits alongside vLLM (~40GB)
           limits:
-            nvidia.com/gpu: 1
-            memory: "12Gi"
+            memory: "16Gi"
           requests:
             memory: "8Gi"
             cpu: "2"
@@ -204,9 +210,9 @@ spec:
           path: /mnt/model-cache
           type: DirectoryOrCreate
 
-      # Schedule on GPU nodes only
+      # Schedule on Thor GPU node
       nodeSelector:
-        nvidia.com/gpu: "true"
+        nvidia.com/gpu.product: "AGX-Thor"
 
       restartPolicy: Always
 
