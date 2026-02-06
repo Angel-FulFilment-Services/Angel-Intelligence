@@ -32,6 +32,11 @@ RUN rm -rf /var/lib/apt/lists/* && \
 COPY requirements/base.txt requirements/
 COPY requirements/transcription.txt requirements/
 
+# Reset pip index to use PyPI as primary, Jetson as extra
+# This fixes setuptools not found during build
+ENV PIP_INDEX_URL=https://pypi.org/simple
+ENV PIP_EXTRA_INDEX_URL=http://jetson.webredirect.org/jp6/cu122
+
 # faster-whisper and ctranslate2 already in base image!
 # Just install WhisperX and pyannote for alignment + diarization
 RUN pip install --no-cache-dir git+https://github.com/m-bain/whisperx.git --no-deps
