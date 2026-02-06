@@ -827,9 +827,6 @@ Return your analysis as valid JSON matching this exact structure:
     "compliance_flags": [
         {{"type": "GDPR|payment_security|misleading_info|rudeness|data_protection", "segment_ids": ["seg_a1b2c3d4", "seg_e5f6g7h8"], "severity": "low/medium/high/critical", "issue": "detailed description", "quote": "exact quote from transcript"}}
     ],
-    "performance_scores": {{
-        {perf_scores_json}
-    }},
     "audio_observations": {{
         "agent_tone": "warm/neutral/cold/hostile",
         "agent_emotion": "calm/frustrated/happy/anxious/other",
@@ -1538,9 +1535,6 @@ Return your analysis as valid JSON matching this EXACT structure:
         {{"segment_ids": ["seg_m3n4o5p6"], "impact": -2, "category": "{perf_keys[2] if len(perf_keys) > 2 else 'Listening'}", "reason": "Interrupted supporter", "quote": "Yes but what I meant was--"}}
     ],
     "compliance_flags": [],
-    "performance_scores": {{
-        {perf_scores_example}
-    }},
     "action_items": [
         {{"description": "Send confirmation email", "priority": "high"}}
     ]
@@ -1675,13 +1669,6 @@ CRITICAL RULES:
                         logger.error("Array does not contain valid object, falling back")
                         return self._fallback_parse_response(response, speaker_metrics)
                 
-                # Fix performance_scores if model used wrong structure
-                perf_scores = parsed.get("performance_scores", {})
-                if isinstance(perf_scores, dict) and "criterion_name" in perf_scores and "score" in perf_scores:
-                    # Model output: {"criterion_name": "Empathy", "score": 8}
-                    # Convert to: {"Empathy": 8}
-                    perf_scores = {perf_scores["criterion_name"]: perf_scores["score"]}
-                
                 # Extract score_impacts and calculate quality_score
                 score_impacts = parsed.get("score_impacts", [])
                 quality_score = self._calculate_quality_score(score_impacts)
@@ -1694,7 +1681,6 @@ CRITICAL RULES:
                     "key_topics": self._add_keys_to_array(parsed.get("key_topics", parsed.get("key_topic", []))),
                     "agent_actions": parsed.get("agent_actions", []),
                     "score_impacts": self._add_keys_to_array(score_impacts),
-                    "performance_scores": perf_scores,
                     "action_items": parsed.get("action_items", []),
                     "compliance_flags": self._add_keys_to_array(parsed.get("compliance_flags", [])),
                     "speaker_metrics": speaker_metrics,
@@ -2076,7 +2062,6 @@ CRITICAL RULES:
         all_issues = []
         all_positives = []
         observations = []
-        all_performance_scores = {}
         
         for c in chunk_analyses:
             all_topics.extend(c.get("detected_topics", []))
@@ -2086,17 +2071,6 @@ CRITICAL RULES:
             all_positives.extend(c.get("positive_indicators", []))
             if c.get("brief_observation"):
                 observations.append(c["brief_observation"])
-            
-            # Merge performance scores
-            for key, value in c.get("performance_scores", {}).items():
-                if key not in all_performance_scores:
-                    all_performance_scores[key] = []
-                all_performance_scores[key].append(value)
-        
-        # Average performance scores
-        final_performance_scores = {
-            k: round(sum(v) / len(v)) for k, v in all_performance_scores.items()
-        }
         
         # Determine dominant tones
         tones = [c.get("agent_tone", "neutral") for c in chunk_analyses]
@@ -2135,7 +2109,6 @@ CRITICAL RULES:
             "key_topics": key_topics,
             "agent_actions": agent_actions,
             "score_impacts": all_score_impacts[:15],  # Limit to 15 most significant
-            "performance_scores": final_performance_scores,
             "action_items": [],
             "compliance_flags": [{"type": "issue", "issue": i, "severity": "medium", "timestamp_start": 0.0, "timestamp_end": 0.0} for i in list(set(all_issues))[:5]],
             "speaker_metrics": speaker_metrics,
@@ -2192,7 +2165,6 @@ CRITICAL RULES:
             "agent_actions": [],
             "score_impacts": [],
             "compliance_flags": [],
-            "performance_scores": {},
             "audio_observations": {
                 "agent_tone": "neutral",
                 "agent_emotion": "calm",
@@ -2248,7 +2220,6 @@ CRITICAL RULES:
         all_actions = []
         all_score_impacts = []
         all_compliance_flags = []
-        all_performance_scores = {}
         sentiment_scores = []
         
         # Audio-specific observations
@@ -2282,13 +2253,6 @@ CRITICAL RULES:
             # Compliance flags
             all_compliance_flags.extend(chunk.get("compliance_flags", []))
             
-            # Performance scores (average across chunks)
-            for key, value in chunk.get("performance_scores", {}).items():
-                if key not in all_performance_scores:
-                    all_performance_scores[key] = []
-                if isinstance(value, (int, float)):
-                    all_performance_scores[key].append(value)
-            
             # Sentiment
             if "sentiment_score" in chunk:
                 sentiment_scores.append(chunk["sentiment_score"])
@@ -2308,11 +2272,6 @@ CRITICAL RULES:
         # Calculate averages
         avg_sentiment = sum(sentiment_scores) / len(sentiment_scores) if sentiment_scores else 5.0
         avg_clarity = sum(clarity_scores) / len(clarity_scores) if clarity_scores else 7.0
-        
-        # Average performance scores
-        final_performance_scores = {
-            k: round(sum(v) / len(v)) for k, v in all_performance_scores.items() if v
-        }
         
         # Determine dominant audio qualities
         dominant_tone = max(set(tones), key=tones.count) if tones else "neutral"
@@ -2391,7 +2350,6 @@ CRITICAL RULES:
             "key_topics": [],
             "agent_actions": [],
             "score_impacts": [],
-            "performance_scores": {},
             "action_items": [],
             "compliance_flags": [],
             "speaker_metrics": speaker_metrics,
@@ -2442,16 +2400,6 @@ CRITICAL RULES:
                 {"action": "Closed call professionally", "timestamp_start": 280.0, "timestamp_end": 300.0},
             ],
             "score_impacts": self._add_keys_to_array(mock_score_impacts),
-            "performance_scores": {
-                "Empathy": 8,
-                "Clarity": 9,
-                "Listening": 7,
-                "Script_adherence": 8,
-                "Product_knowledge": 9,
-                "Rapport_building": 8,
-                "Objection_handling": 6,
-                "Closing_effectiveness": 8,
-            },
             "action_items": [
                 {"description": "Send confirmation email with Gift Aid declaration", "priority": "high"},
             ],
