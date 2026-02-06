@@ -18,19 +18,26 @@ import time
 import uuid
 from typing import Dict, Any, List, Optional
 
-import torch
-
-# PyTorch 2.6+ compatibility fix for pyannote/HuggingFace model loading
-# These models were saved with older PyTorch and contain omegaconf objects
-# that aren't in the new safe globals list. Since we trust HuggingFace models,
-# we patch torch.load to force weights_only=False for model loading.
-_original_torch_load = torch.load
-def _patched_torch_load(*args, **kwargs):
-    # Force weights_only=False for trusted model checkpoints
-    # Lightning/pyannote explicitly pass weights_only=True which we need to override
-    kwargs['weights_only'] = False
-    return _original_torch_load(*args, **kwargs)
-torch.load = _patched_torch_load
+# PyTorch is optional - only needed when running transcription locally
+# Workers call transcription service via HTTP and don't need torch
+TORCH_AVAILABLE = False
+try:
+    import torch
+    TORCH_AVAILABLE = True
+    
+    # PyTorch 2.6+ compatibility fix for pyannote/HuggingFace model loading
+    # These models were saved with older PyTorch and contain omegaconf objects
+    # that aren't in the new safe globals list. Since we trust HuggingFace models,
+    # we patch torch.load to force weights_only=False for model loading.
+    _original_torch_load = torch.load
+    def _patched_torch_load(*args, **kwargs):
+        # Force weights_only=False for trusted model checkpoints
+        # Lightning/pyannote explicitly pass weights_only=True which we need to override
+        kwargs['weights_only'] = False
+        return _original_torch_load(*args, **kwargs)
+    torch.load = _patched_torch_load
+except ImportError:
+    pass
 
 from src.config import get_settings
 

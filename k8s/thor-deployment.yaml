@@ -139,15 +139,8 @@ spec:
         # Or use a custom label:
         # angel.ai/tier: "thor"
       
-      # One worker per Thor node
-      affinity:
-        podAntiAffinity:
-          requiredDuringSchedulingIgnoredDuringExecution:
-          - labelSelector:
-              matchLabels:
-                app: angel-intelligence
-                tier: thor
-            topologyKey: kubernetes.io/hostname
+      # NOTE: Anti-affinity removed - workers are lightweight HTTP orchestrators
+      # and can run alongside vLLM/transcription pods on same Thor node
 
       containers:
       - name: worker
