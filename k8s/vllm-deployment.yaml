@@ -197,9 +197,9 @@ spec:
         - name: adapters
           persistentVolumeClaim:
             claimName: angel-intelligence-thor-models
-      # Prefer nodes with GPU
+      # Schedule on Thor node (has GPU)
       nodeSelector:
-        nvidia.com/gpu.present: "true"
+        nvidia.com/gpu.product: "AGX-Thor"
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists

@@ -35,7 +35,7 @@ spec:
     spec:
       nodeSelector:
         kubernetes.io/arch: arm64
-        nvidia.com/gpu.product: "Thor"  # Pin to Thor nodes only
+        nvidia.com/gpu.product: "AGX-Thor"
       
       # Anti-affinity to spread pods across Thor nodes (if multiple)
       affinity:

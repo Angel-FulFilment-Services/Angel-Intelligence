@@ -159,7 +159,7 @@ spec:
           persistentVolumeClaim:
             claimName: audio-vllm-model-cache
       nodeSelector:
-        nvidia.com/gpu.present: "true"
+        nvidia.com/gpu.product: "AGX-Thor"
       tolerations:
         - key: nvidia.com/gpu
           operator: Exists

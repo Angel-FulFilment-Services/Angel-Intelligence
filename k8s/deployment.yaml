@@ -270,9 +270,9 @@ spec:
           path: /mnt/model-cache
           type: DirectoryOrCreate
 
-      # Only schedule on nodes with GPU
+      # Schedule on Thor GPU node
       nodeSelector:
-        nvidia.com/gpu: "true"
+        nvidia.com/gpu.product: "AGX-Thor"
 
       restartPolicy: Always
 
@@ -664,9 +664,9 @@ spec:
           path: /mnt/model-cache
           type: DirectoryOrCreate
 
-      # Schedule on GPU nodes
+      # Schedule on Thor GPU node
       nodeSelector:
-        nvidia.com/gpu: "true"
+        nvidia.com/gpu.product: "AGX-Thor"
 
       restartPolicy: Always
 
