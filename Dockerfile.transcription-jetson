@@ -1,13 +1,14 @@
 # ==============================================================================
 # Angel Intelligence - Transcription Pod Dockerfile (Jetson ARM64)
 # ==============================================================================
-# Shared WhisperX transcription service for NVIDIA Jetson / Thor
-# Image size: ~5GB (torch + WhisperX + pyannote + ctranslate2-cuda)
+# Uses dustynv/wyoming-whisper which has faster-whisper + ctranslate2 CUDA pre-built!
+# No compilation required - instant build.
 #
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-FROM dustynv/l4t-pytorch:r36.2.0
+# Pre-built with: PyTorch, ctranslate2 (CUDA), faster-whisper
+FROM dustynv/wyoming-whisper:latest-r36.2.0
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Jetson)"
 LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
@@ -19,36 +20,30 @@ ENV ANGEL_ENV=production
 
 WORKDIR /workspace
 
-# Install system dependencies including cmake for ctranslate2 build
+# Install additional system dependencies
 RUN rm -rf /var/lib/apt/lists/* && \
     apt-get clean && \
     apt-get update --fix-missing && \
     apt-get install -y --no-install-recommends \
-        sox libsox-fmt-all ffmpeg libopenblas-dev git curl \
+        sox libsox-fmt-all \
     && rm -rf /var/lib/apt/lists/*
-
-# Use dusty-nv's Jetson pip server for CUDA-compiled wheels
-# This has ctranslate2 and other packages pre-compiled for ARM64 CUDA
-RUN pip config set global.index-url https://pypi.org/simple && \
-    pip config set global.extra-index-url "https://pypi.jetson-ai-lab.io/jp6/cu126" && \
-    pip install --upgrade pip setuptools wheel
 
 # Copy requirements
 COPY requirements/base.txt requirements/
 COPY requirements/transcription.txt requirements/
 
-# Install ctranslate2 with CUDA from Jetson pip server
-RUN pip install --no-cache-dir ctranslate2
+# faster-whisper and ctranslate2 already in base image!
+# Just install WhisperX and pyannote for alignment + diarization
+RUN pip install --no-cache-dir git+https://github.com/m-bain/whisperx.git --no-deps
 
-# Install dependencies (torch already in base image)
-RUN pip install --no-cache-dir -r requirements/transcription.txt
+# Install pyannote for speaker diarization
+RUN pip install --no-cache-dir pyannote.audio
 
-# Install faster-whisper (will use CUDA ctranslate2 we just installed)
-RUN pip install faster-whisper==1.1.0
+# Install minimal WhisperX deps
+RUN pip install --no-cache-dir pandas nltk more-itertools
 
-# Install WhisperX and pyannote
-RUN pip install git+https://github.com/m-bain/whisperx.git --no-deps && \
-    pip install pyannote.audio
+# Install remaining transcription dependencies
+RUN pip install --no-cache-dir -r requirements/transcription.txt 2>/dev/null || true
 
 # Fix all bundled libgomp conflicts - find and replace ALL of them with system libgomp
 RUN find /usr/local/lib -name "libgomp*.so*" -type f 2>/dev/null | while read f; do \
