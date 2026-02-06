@@ -32,16 +32,16 @@ data:
   
   # Whisper Model
   whisper-model: "medium"
-  whisper-model-path: "/models/whisper"
+  whisper-model-path: "/models/whisper/faster-whisper-large-v3"
   
   # Analysis Model (for batch call processing)
   analysis-model: "Qwen/Qwen2.5-32B-Instruct-AWQ"
-  analysis-model-path: "/models/analysis"
+  analysis-model-path: "/models/analysis/Qwen2.5-72B-Instruct-AWQ"
   analysis-model-quantization: "none"  # AWQ is pre-quantized
   
   # Chat Model (for interactive requests)
   chat-model: "Qwen/Qwen2.5-7B-Instruct"
-  chat-model-path: "/models/chat"
+  chat-model-path: "/models/analysis/Qwen2.5-72B-Instruct-AWQ"
   chat-model-quantization: "int4"
   
   # vLLM Configuration (shared model server for text analysis)

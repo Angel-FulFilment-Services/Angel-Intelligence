@@ -130,7 +130,7 @@ spec:
                 - name: ADAPTER_NAME
                   value: "call-analysis"
                 - name: BASE_MODEL_PATH
-                  value: "/models/Qwen2.5-72B-Instruct-AWQ"
+                  value: "/models/analysis/Qwen2.5-72B-Instruct-AWQ"
                 
                 # Minimum annotations required to trigger training
                 - name: MIN_NEW_ANNOTATIONS

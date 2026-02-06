@@ -41,18 +41,18 @@ data:
   
   # Transcription - use large-v3 for best accuracy
   whisper-model: "large-v3"
-  whisper-model-path: "/models/whisper"
+  whisper-model-path: "/models/whisper/faster-whisper-large-v3"
   transcript-segmentation: "word"
   
   # Analysis Model - 72B AWQ for high-quality output
   analysis-model: "Qwen/Qwen2.5-72B-Instruct-AWQ"
-  analysis-model-path: "/models/analysis"
+  analysis-model-path: "/models/analysis/Qwen2.5-72B-Instruct-AWQ"
   analysis-model-quantization: "awq"
   
   # Chat Model - using same 72B AWQ via vLLM for consistency
   # When using vLLM, this is just the model name for API requests
   chat-model: "Qwen/Qwen2.5-72B-Instruct-AWQ"
-  chat-model-path: "/models/chat"
+  chat-model-path: "/models/analysis/Qwen2.5-72B-Instruct-AWQ"
   chat-model-quantization: "awq"
   
   # vLLM API Server - shared model server for all workers

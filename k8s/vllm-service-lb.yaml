@@ -53,7 +53,7 @@ spec:
           image: vllm/vllm-openai:latest
           args:
             - "--model"
-            - "/models/Qwen2.5-72B-Instruct-AWQ"
+            - "/models/analysis/Qwen2.5-72B-Instruct-AWQ"
             - "--quantization"
             - "awq"
             - "--dtype"
@@ -78,6 +78,14 @@ spec:
             - containerPort: 8000
               name: http
               protocol: TCP
+          
+          env:
+            - name: HF_HOME
+              value: "/models"
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
           
           resources:
             requests:
