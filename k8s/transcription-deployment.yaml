@@ -108,7 +108,7 @@ spec:
 
       containers:
       - name: transcription
-        image: 192.168.9.50:30500/angel-intelligence:latest-arm64
+        image: 192.168.9.50:5000/angel-intelligence:transcription-arm64
         imagePullPolicy: IfNotPresent
         
         # LD_PRELOAD fixes ARM64 OpenMP TLS issue

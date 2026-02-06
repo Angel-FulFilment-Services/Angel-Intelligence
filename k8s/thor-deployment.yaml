@@ -149,8 +149,8 @@ spec:
 
       containers:
       - name: worker
-        image: your-registry/angel-intelligence:latest
-        imagePullPolicy: Always
+        image: 192.168.9.50:5000/angel-intelligence:worker-arm64
+        imagePullPolicy: IfNotPresent
         
         command: ["python", "-m", "src.worker.worker"]
 
@@ -392,8 +392,8 @@ spec:
 
       containers:
       - name: interactive
-        image: your-registry/angel-intelligence:latest
-        imagePullPolicy: Always
+        image: 192.168.9.50:5000/angel-intelligence:worker-arm64
+        imagePullPolicy: IfNotPresent
         
         command: ["python", "-m", "src.worker.worker"]
 

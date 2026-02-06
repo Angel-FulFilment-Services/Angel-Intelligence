@@ -81,7 +81,7 @@ spec:
     spec:
       containers:
         - name: vllm
-          image: vllm/vllm-openai:latest
+          image: 192.168.9.50:5000/angel-intelligence:vllm-arm64
           ports:
             - containerPort: 8000
               name: http

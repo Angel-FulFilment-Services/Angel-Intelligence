@@ -324,7 +324,7 @@ spec:
 
       containers:
       - name: api
-        image: 192.168.9.50:30500/angel-intelligence:latest-amd64
+        image: 192.168.9.50:5000/angel-intelligence:api
         imagePullPolicy: IfNotPresent
 
         command: ["python3", "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
