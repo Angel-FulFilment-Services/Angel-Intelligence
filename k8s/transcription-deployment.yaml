@@ -166,9 +166,11 @@ spec:
               key: huggingface-token
 
         resources:
+          # NOTE: GPU resource removed to allow sharing with vLLM on Thor
+          # WhisperX will still use CUDA via runtimeClassName: nvidia
+          # Each model uses ~10GB VRAM (medium) which fits alongside vLLM (~40GB)
           limits:
-            nvidia.com/gpu: 1
-            memory: "12Gi"
+            memory: "16Gi"
           requests:
             memory: "8Gi"
             cpu: "2"
