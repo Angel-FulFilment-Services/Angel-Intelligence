@@ -1,0 +1,198 @@
+# ==============================================================================
+# Angel Intelligence - API Deployment (Standalone)
+# ==============================================================================
+# Runs on master/control-plane node, proxies requests to workers
+#
+# Apply: kubectl apply -f k8s/api-deployment.yaml
+# ==============================================================================
+
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: angel-intelligence-api
+  namespace: default
+  labels:
+    app: angel-intelligence
+    component: api
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: angel-intelligence
+      component: api
+  template:
+    metadata:
+      labels:
+        app: angel-intelligence
+        component: api
+    spec:
+      hostAliases:
+        - ip: "192.168.5.13"
+          hostnames:
+            - "afs-db02.angelfs.co.uk"
+
+      # Allow scheduling on master/control-plane nodes
+      tolerations:
+      - key: "node-role.kubernetes.io/control-plane"
+        operator: "Exists"
+        effect: "NoSchedule"
+      - key: "node-role.kubernetes.io/master"
+        operator: "Exists"
+        effect: "NoSchedule"
+
+      # Prefer scheduling on master node to free up GPU node for AI workloads
+      affinity:
+        nodeAffinity:
+          requiredDuringSchedulingIgnoredDuringExecution:
+            nodeSelectorTerms:
+            - matchExpressions:
+              - key: kubernetes.io/hostname
+                operator: In
+                values:
+                - afs-kube01
+
+      containers:
+      - name: api
+        image: 192.168.9.50:5000/api:latest
+        imagePullPolicy: Always
+
+        command: ["python3", "-m", "uvicorn", "src.api.app:app", "--host", "0.0.0.0", "--port", "8000"]
+
+        ports:
+        - containerPort: 8000
+          name: http
+
+        env:
+        - name: ANGEL_ENV
+          value: "production"
+        - name: WORKER_MODE
+          value: "api"
+        # Interactive service URL for AI request proxying
+        - name: INTERACTIVE_SERVICE_URL
+          value: "http://angel-intelligence-interactive:8000"
+        - name: PRELOAD_CHAT_MODEL
+          value: "false"
+        
+        # Secrets
+        - name: API_AUTH_TOKEN
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: api-auth-token
+        - name: AI_DB_HOST
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-host
+        - name: AI_DB_PORT
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-port
+        - name: AI_DB_DATABASE
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-database
+        - name: AI_DB_USERNAME
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-username
+        - name: AI_DB_PASSWORD
+          valueFrom:
+            secretKeyRef:
+              name: angel-intelligence-secrets
+              key: db-password
+
+        # ConfigMap values
+        - name: WHISPER_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: whisper-model
+        - name: WHISPER_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: whisper-model-path
+        - name: ANALYSIS_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model
+        - name: ANALYSIS_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model-path
+        - name: ANALYSIS_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: analysis-model-quantization
+        - name: CHAT_MODEL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model
+        - name: CHAT_MODEL_PATH
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model-path
+        - name: CHAT_MODEL_QUANTIZATION
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: chat-model-quantization
+        - name: CUDA_VISIBLE_DEVICES
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-config
+              key: cuda-visible-devices
+
+        resources:
+          requests:
+            memory: "1Gi"
+            cpu: "500m"
+          limits:
+            memory: "2Gi"
+            cpu: "1"
+
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 10
+          periodSeconds: 30
+
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 10
+
+      restartPolicy: Always
+
+---
+# API Service
+apiVersion: v1
+kind: Service
+metadata:
+  name: angel-intelligence-api
+  namespace: default
+  labels:
+    app: angel-intelligence
+    component: api
+spec:
+  type: ClusterIP
+  ports:
+  - port: 8000
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: angel-intelligence
+    component: api
