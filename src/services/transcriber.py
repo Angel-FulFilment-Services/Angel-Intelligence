@@ -172,54 +172,64 @@ class TranscriptionService:
         language: str = "en",
         diarize: bool = True
     ) -> Dict[str, Any]:
-        """Transcribe via the shared transcription service."""
-        import asyncio
-        
-        proxy = self._get_proxy()
-        if not proxy:
-            raise RuntimeError("Transcription proxy not available")
+        """Transcribe via the shared transcription service using sync HTTP."""
+        import httpx
+        import base64
+        from pathlib import Path
         
         logger.info(f"Transcribing via proxy: {audio_path}")
         
-        async def _do_transcribe():
-            result = await proxy.transcribe(
-                audio_path=audio_path,
-                diarize=diarize,
-                language=language if language != "auto" else None,
-            )
-            return result
+        # Read audio file and encode as base64
+        audio_file = Path(audio_path)
+        if not audio_file.exists():
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
         
-        # Run async proxy call in sync context
-        # Use asyncio.run() which handles event loop creation properly
+        audio_data = audio_file.read_bytes()
+        audio_base64 = base64.b64encode(audio_data).decode("utf-8")
+        
+        # Build request
+        request_data = {
+            "audio_base64": audio_base64,
+            "filename": audio_file.name,
+            "diarize": diarize
+        }
+        
+        if language and language != "auto":
+            request_data["language"] = language
+        
+        # Use sync HTTP client (no async complexity)
         try:
-            # Check if we're already in an async context
-            try:
-                loop = asyncio.get_running_loop()
-                # We're in an async context - use thread pool to avoid nested event loop
-                import concurrent.futures
-                with concurrent.futures.ThreadPoolExecutor() as executor:
-                    future = executor.submit(asyncio.run, _do_transcribe())
-                    result = future.result(timeout=300)
-            except RuntimeError:
-                # No running event loop - safe to use asyncio.run()
-                result = asyncio.run(_do_transcribe())
+            with httpx.Client(timeout=httpx.Timeout(300.0, connect=30.0)) as client:
+                response = client.post(
+                    f"{self.service_url}/internal/transcribe",
+                    json=request_data
+                )
+                
+                if response.status_code != 200:
+                    raise RuntimeError(f"Transcription failed: {response.status_code} - {response.text}")
+                
+                data = response.json()
         except Exception as e:
             logger.error(f"Proxy transcription error: {e}")
             raise
         
-        logger.info(f"Proxy transcription complete: {len(result.segments)} segments, {result.processing_time:.1f}s")
+        text = data.get("text", "")
+        segments = data.get("segments", [])
+        processing_time = data.get("processing_time", 0.0)
+        
+        logger.info(f"Proxy transcription complete: {len(segments)} segments, {processing_time:.1f}s")
         
         # Convert to standard format
         return {
-            "full_transcript": result.text,
-            "text": result.text,
-            "segments": result.segments,
-            "language_detected": result.language,
-            "language": result.language,
+            "full_transcript": text,
+            "text": text,
+            "segments": segments,
+            "language_detected": data.get("language", "unknown"),
+            "language": data.get("language", "unknown"),
             "confidence": 0.95,
             "model_used": f"whisperx-{self.model_size}",
-            "processing_time": result.processing_time,
-            "duration": result.duration,
+            "processing_time": processing_time,
+            "duration": data.get("duration", 0.0),
         }
     
     def _transcribe_local(
