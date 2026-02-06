@@ -97,7 +97,8 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  storageClassName: nfs-client
+  # Use existing manually-bound PV (don't specify storageClassName for manual binding)
+  volumeName: angel-models-pv
   resources:
     requests:
       storage: 100Gi  # 32B + 14B + Whisper large + diarization

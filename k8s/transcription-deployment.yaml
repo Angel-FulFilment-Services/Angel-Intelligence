@@ -140,6 +140,12 @@ spec:
           value: "api"
         - name: USE_GPU
           value: "true"
+        
+        # vLLM API for live session canvas updates (chat functionality)
+        - name: LLM_API_URL
+          value: "http://vllm-service:8000/v1"
+        - name: CHAT_MODEL
+          value: "Qwen/Qwen2.5-72B-Instruct-AWQ"
           
         # Whisper model settings
         - name: WHISPER_MODEL

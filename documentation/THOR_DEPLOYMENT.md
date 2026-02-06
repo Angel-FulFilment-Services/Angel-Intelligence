@@ -460,9 +460,11 @@ Angel Intelligence uses modular Dockerfiles for minimal image sizes:
 
 | Dockerfile | Pod | Size | Description |
 |------------|-----|------|-------------|
-| `Dockerfile.worker-jetson` | Worker | ~400MB | HTTP orchestrator |
+| `Dockerfile.worker-jetson` | Batch & Interactive Workers | ~400MB | HTTP orchestrator (same image, different WORKER_MODE) |
 | `Dockerfile.transcription-jetson` | Transcription | ~4GB | WhisperX + pyannote |
 | `Dockerfile.api` | API | ~200MB | API gateway |
+
+> **Note:** Batch and Interactive workers use the **same Docker image**. The difference is the `WORKER_MODE` environment variable (`batch` vs `interactive`) set in the Kubernetes deployment.
 
 **Build and push to local registry:**
 
@@ -474,7 +476,8 @@ export REGISTRY_IP=$(hostname -I | awk '{print $1}')
 docker buildx create --use --name multiarch 2>/dev/null || docker buildx use multiarch
 
 # Build Worker image (ARM64 for Thor)
-# Use --load to load locally, then push with docker push (respects insecure registry config)
+# This single image is used for BOTH batch and interactive workers
+# The WORKER_MODE env var in k8s deployment determines behavior
 docker buildx build --platform linux/arm64 \
   -f Dockerfile.worker-jetson \
   -t ${REGISTRY_IP}:5000/angel-intelligence:worker-arm64 \
@@ -486,7 +489,7 @@ docker buildx build --platform linux/arm64 \
   -f Dockerfile.transcription-jetson \
   -t ${REGISTRY_IP}:5000/angel-intelligence:transcription-arm64 \
   --load .
-docker push ${REGISTRY_IP}:5000/angel-intelligence:transcription-arm64  # HERE
+docker push ${REGISTRY_IP}:5000/angel-intelligence:transcription-arm64
 
 # Build API image (x86_64 for gateway - no buildx needed)
 docker build -f Dockerfile.api \
@@ -508,7 +511,7 @@ Update image references in your deployment YAML files to use the local registry:
 # k8s/vllm-deployment.yaml - vLLM server
 image: CONTROL_PLANE_IP:5000/angel-intelligence:vllm-arm64
 
-# k8s/thor-deployment.yaml - Worker pods  
+# k8s/thor-deployment.yaml - Batch AND Interactive Worker pods (same image!)
 image: CONTROL_PLANE_IP:5000/angel-intelligence:worker-arm64
 
 # k8s/transcription-deployment.yaml - Transcription pods
@@ -517,6 +520,8 @@ image: CONTROL_PLANE_IP:5000/angel-intelligence:transcription-arm64
 # k8s/deployment.yaml - API pod (gateway node)
 image: CONTROL_PLANE_IP:5000/angel-intelligence:api
 ```
+
+> **Note:** Both `angel-intelligence-thor-batch` and `angel-intelligence-thor-interactive` deployments use the same `worker-arm64` image. The `WORKER_MODE` environment variable (`batch` or `interactive`) determines the worker behavior.
 
 When you deploy, K3s on Thor will automatically pull from the local registry.
 
