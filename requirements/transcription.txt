@@ -25,7 +25,7 @@ python-multipart==0.0.12
 # ------------------------------------------------------------------------------
 ffmpeg-python==0.2.0
 soundfile==0.12.1
-scipy==1.14.1
+scipy==1.11.4  # 1.14+ requires Python 3.10+
 
 # ------------------------------------------------------------------------------
 # PyTorch - Install FIRST before other dependencies
