@@ -185,19 +185,27 @@ spec:
               memory: "32Gi"
               cpu: "8"
               nvidia.com/gpu: "1"
+          # Startup probe: allows model to load before liveness/readiness kick in
+          # 72B AWQ model can take 10-15 minutes to load on Thor
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 120  # 60s + (120 * 10s) = 21 minutes max startup
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 120  # Model loading takes time
             periodSeconds: 10
             timeoutSeconds: 5
-            failureThreshold: 30  # Allow 5 minutes for initial load
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 300
             periodSeconds: 30
             timeoutSeconds: 10
             failureThreshold: 3
