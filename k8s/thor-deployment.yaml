@@ -76,8 +76,8 @@ data:
   enable-pii-redaction: "true"
   
   # PBX Sources
-  pbx-live-url: "https://pbx.example.com/callrec/"
-  pbx-archive-url: "https://archive.example.com/"
+  pbx-live-url: "https://pbx.angelfs.co.uk/callrec/"
+  pbx-archive-url: "https://afs-pbx-callarchive.angelfs.co.uk/"
   
   # GPU
   cuda-visible-devices: "0"
