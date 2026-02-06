@@ -172,8 +172,18 @@ async def root():
 @router.get("/health", response_model=HealthResponse)
 async def health():
     """Health check endpoint - no auth required."""
-    import torch
     import os
+    
+    # PyTorch is optional for API pod
+    cuda_available = False
+    device = "cpu"
+    try:
+        import torch
+        cuda_available = torch.cuda.is_available()
+        device = "cuda" if cuda_available else "cpu"
+    except ImportError:
+        pass
+    
     settings = get_settings()
     
     # Check interactive service status
@@ -214,8 +224,8 @@ async def health():
         version="1.0.0",
         worker_id=settings.worker_id,
         environment=settings.angel_env,
-        device="cuda" if torch.cuda.is_available() else "cpu",
-        cuda_available=torch.cuda.is_available(),
+        device=device,
+        cuda_available=cuda_available,
         models_loaded=models_loaded,
         worker_mode=settings.worker_mode,
     )
