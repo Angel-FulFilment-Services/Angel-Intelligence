@@ -79,6 +79,12 @@ spec:
       labels:
         app: vllm-server
     spec:
+      runtimeClassName: nvidia
+      
+      # Schedule on Thor nodes
+      nodeSelector:
+        nvidia.com/gpu.product: "AGX-Thor"
+      
       containers:
         - name: vllm
           image: 192.168.9.50:5000/angel-intelligence:vllm-arm64
