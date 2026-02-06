@@ -20,8 +20,11 @@ ENV ANGEL_ENV=production
 WORKDIR /workspace
 
 # Install system dependencies (Python 3.10 already in base image)
-RUN apt-get update && \
-    apt-get install -y \
+# Clean apt cache first to avoid GPG signature issues with QEMU emulation
+RUN rm -rf /var/lib/apt/lists/* && \
+    apt-get clean && \
+    apt-get update --fix-missing && \
+    apt-get install -y --no-install-recommends \
         sox libsox-fmt-all ffmpeg libopenblas-dev git curl \
     && rm -rf /var/lib/apt/lists/*
 
