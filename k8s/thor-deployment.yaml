@@ -55,16 +55,14 @@ data:
   chat-model-path: "/models/chat"
   chat-model-quantization: "awq"
   
-  # vLLM API Server - set to use shared model server instead of local models
-  # Deploy vllm-deployment.yaml first, then set the URL:
-  # llm-api-url: "http://vllm-server:8000/v1"
-  llm-api-url: ""  # Empty = use local models
+  # vLLM API Server - shared model server for all workers
+  llm-api-url: "http://vllm-server:8000/v1"
   llm-api-key: ""  # Optional API key if vLLM requires auth
   
   # LoRA adapter name for fine-tuned analysis (folder under /models/adapters/)
   analysis-adapter-name: "call-analysis"
   
-  # No transcript limit for 32B
+  # No transcript limit for 72B
   max-transcript-length: "0"
   
   # Worker mode
@@ -81,8 +79,8 @@ data:
   # GPU
   cuda-visible-devices: "0"
   
-  # Hot reload disabled for stability
-  enable-model-hot-reload: "false"
+  # Hot reload enabled for LoRA adapter updates without pod restart
+  enable-model-hot-reload: "true"
 
 ---
 apiVersion: v1

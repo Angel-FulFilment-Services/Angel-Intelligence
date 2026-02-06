@@ -479,14 +479,14 @@ docker buildx build --platform linux/arm64 \
   -f Dockerfile.worker-jetson \
   -t ${REGISTRY_IP}:5000/angel-intelligence:worker-arm64 \
   --load .
-docker push ${REGISTRY_IP}:5000/angel-intelligence:worker-arm64 # HERE
+docker push ${REGISTRY_IP}:5000/angel-intelligence:worker-arm64
 
 # Build Transcription image (ARM64 for Thor)
 docker buildx build --platform linux/arm64 \
   -f Dockerfile.transcription-jetson \
   -t ${REGISTRY_IP}:5000/angel-intelligence:transcription-arm64 \
   --load .
-docker push ${REGISTRY_IP}:5000/angel-intelligence:transcription-arm64
+docker push ${REGISTRY_IP}:5000/angel-intelligence:transcription-arm64  # HERE
 
 # Build API image (x86_64 for gateway - no buildx needed)
 docker build -f Dockerfile.api \
@@ -524,31 +524,9 @@ When you deploy, K3s on Thor will automatically pull from the local registry.
 
 ## Phase 5: Deploy Services (In Order)
 
-### Step 5.1: Apply ConfigMap
+### Step 5.1: Deploy vLLM Server (First)
 
-Review and customise `k8s/thor-deployment.yaml` ConfigMap section:
-
-```yaml
-apiVersion: v1
-kind: ConfigMap
-metadata:
-  name: angel-intelligence-thor-config
-data:
-  # Update these for your environment
-  analysis-model: "Qwen/Qwen2.5-72B-Instruct-AWQ"
-  whisper-model: "large-v3"
-  pbx-live-url: "https://your-pbx.example.com/callrec/"
-  pbx-archive-url: "https://your-archive.example.com/"
-```
-
-Apply the full thor-deployment.yaml (this includes the ConfigMap):
-```bash
-kubectl apply -f k8s/thor-deployment.yaml
-```
-
-### Step 5.2: Deploy vLLM Server (First)
-
-The vLLM server provides shared LLM inference for all workers.
+The vLLM server must be running **before** workers start, as they connect to it.
 
 ```bash
 # Deploy vLLM
@@ -575,12 +553,10 @@ Expected output:
 }
 ```
 
-### Step 5.3: Deploy Transcription Service
-
-The transcription service provides shared WhisperX for all workers.
+### Step 5.2: Deploy Transcription Service
 
 ```bash
-# Deploy transcription pods (start with 1, scale up after verification)
+# Deploy transcription pods
 kubectl apply -f k8s/transcription-deployment.yaml
 
 # Wait for WhisperX model to load
@@ -599,30 +575,18 @@ Expected output:
 {"status": "healthy", "model_loaded": true}
 ```
 
-### Step 5.4: Update ConfigMap with Service URLs
+### Step 5.3: Deploy Thor Workers (ConfigMap + Workers)
 
-Now that services are running, update the thor-deployment ConfigMap:
-
-```bash
-kubectl edit configmap angel-intelligence-thor-config
-```
-
-Set:
-```yaml
-data:
-  llm-api-url: "http://vllm-server:8000/v1"
-  transcription-service-url: "http://transcription-service:8001"
-```
-
-Or apply with patch:
-```bash
-kubectl patch configmap angel-intelligence-thor-config -p '{"data":{"llm-api-url":"http://vllm-server:8000/v1"}}'
-```
-
-### Step 5.5: Deploy Workers
+Now that vLLM and transcription are running, deploy the workers:
 
 ```bash
-# Deploy batch and interactive workers
+# Review ConfigMap settings first
+# Edit k8s/thor-deployment.yaml if needed:
+#   - pbx-live-url
+#   - pbx-archive-url
+#   - Any other environment-specific values
+
+# Deploy ConfigMap, PVC, and workers
 kubectl apply -f k8s/thor-deployment.yaml
 
 # Check pods are starting
