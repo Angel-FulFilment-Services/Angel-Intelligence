@@ -134,6 +134,12 @@ spec:
     spec:
       runtimeClassName: nvidia
       
+      # DNS resolution for internal hosts
+      hostAliases:
+        - ip: "192.168.5.13"
+          hostnames:
+            - "afs-db02.angelfs.co.uk"
+      
       # Schedule only on Thor nodes
       nodeSelector:
         nvidia.com/gpu.product: "AGX-Thor"
@@ -388,6 +394,12 @@ spec:
         tier: thor
     spec:
       runtimeClassName: nvidia
+      
+      # DNS resolution for internal hosts
+      hostAliases:
+        - ip: "192.168.5.13"
+          hostnames:
+            - "afs-db02.angelfs.co.uk"
       
       nodeSelector:
         nvidia.com/gpu.product: "AGX-Thor"
