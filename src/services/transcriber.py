@@ -72,9 +72,15 @@ class TranscriptionService:
         self._proxy = None
         
         # Device configuration (for local mode)
-        self.device = "cuda" if torch.cuda.is_available() and settings.use_gpu else "cpu"
-        self.compute_type = "float16" if self.device == "cuda" else "int8"
-        self.batch_size = 16 if self.device == "cuda" else 4
+        # Only check CUDA if torch is available - workers using HTTP proxy don't need it
+        if TORCH_AVAILABLE:
+            self.device = "cuda" if torch.cuda.is_available() and settings.use_gpu else "cpu"
+            self.compute_type = "float16" if self.device == "cuda" else "int8"
+            self.batch_size = 16 if self.device == "cuda" else 4
+        else:
+            self.device = "cpu"
+            self.compute_type = "int8"
+            self.batch_size = 4
         
         # Model configuration
         self.model_size = settings.whisper_model
