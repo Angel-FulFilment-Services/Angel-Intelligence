@@ -56,7 +56,7 @@ data:
   chat-model-quantization: "awq"
   
   # vLLM API Server - shared model server for all workers
-  llm-api-url: "http://vllm-service:8000/v1"
+  llm-api-url: "http://vllm-server:8000/v1"
   llm-api-key: ""  # Optional API key if vLLM requires auth
   
   # Transcription Service - shared WhisperX server
