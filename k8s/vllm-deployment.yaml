@@ -22,7 +22,7 @@ metadata:
 data:
   # Model - use AWQ pre-quantized version for vLLM
   # The base model requires bitsandbytes which vLLM doesn't support
-  MODEL_NAME: "Qwen/Qwen2.5-32B-Instruct-AWQ"
+  MODEL_NAME: "Qwen/Qwen2.5-72B-Instruct-AWQ"
   
   # Maximum model length (context window)
   MAX_MODEL_LEN: "8192"

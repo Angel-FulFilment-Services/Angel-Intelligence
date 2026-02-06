@@ -44,16 +44,16 @@ data:
   whisper-model-path: "/models/whisper"
   transcript-segmentation: "word"
   
-  # Analysis Model - 32B for high-quality output
-  analysis-model: "Qwen/Qwen2.5-32B-Instruct"
+  # Analysis Model - 72B AWQ for high-quality output
+  analysis-model: "Qwen/Qwen2.5-72B-Instruct-AWQ"
   analysis-model-path: "/models/analysis"
-  analysis-model-quantization: "int4"
+  analysis-model-quantization: "awq"
   
-  # Chat Model - using same 32B via vLLM for consistency
+  # Chat Model - using same 72B AWQ via vLLM for consistency
   # When using vLLM, this is just the model name for API requests
-  chat-model: "Qwen/Qwen2.5-32B-Instruct"
+  chat-model: "Qwen/Qwen2.5-72B-Instruct-AWQ"
   chat-model-path: "/models/chat"
-  chat-model-quantization: "int4"
+  chat-model-quantization: "awq"
   
   # vLLM API Server - set to use shared model server instead of local models
   # Deploy vllm-deployment.yaml first, then set the URL:
