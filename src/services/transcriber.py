@@ -83,7 +83,9 @@ class TranscriptionService:
             self.batch_size = 4
         
         # Model configuration
+        # Use local model path if provided, otherwise model name for HF download
         self.model_size = settings.whisper_model
+        self.model_path = settings.whisper_model_path or None
         self.segmentation = settings.transcript_segmentation
         
         # HuggingFace token for pyannote diarization
@@ -124,9 +126,11 @@ class TranscriptionService:
             raise RuntimeError("WhisperX is not installed. Please install with: pip install git+https://github.com/m-bain/whisperx.git")
         
         if self._whisper_model is None:
-            logger.info(f"Loading WhisperX model: {self.model_size}")
+            # Use local model path if provided, otherwise model name (downloads from HF)
+            model_or_path = self.model_path if self.model_path else self.model_size
+            logger.info(f"Loading WhisperX model: {model_or_path}")
             self._whisper_model = whisperx.load_model(
-                self.model_size,
+                model_or_path,
                 self.device,
                 compute_type=self.compute_type
             )
