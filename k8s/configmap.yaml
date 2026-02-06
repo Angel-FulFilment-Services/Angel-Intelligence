@@ -73,19 +73,3 @@ data:
   
   # Model hot reload (production feature)
   enable-model-hot-reload: "false"
-
----
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: angel-intelligence-models
-  namespace: default
-  labels:
-    app: angel-intelligence
-spec:
-  accessModes:
-    - ReadWriteMany
-  storageClassName: nfs-client  # Use your NFS provisioner
-  resources:
-    requests:
-      storage: 50Gi

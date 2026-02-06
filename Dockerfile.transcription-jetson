@@ -48,6 +48,7 @@ RUN rm -f /usr/local/lib/python3.10/dist-packages/scikit_learn.libs/libgomp*.so*
 
 # Copy only necessary code
 COPY src/api/app.py src/api/
+COPY src/api/auth.py src/api/
 COPY src/api/routes.py src/api/
 COPY src/api/__init__.py src/api/
 COPY src/config/ src/config/
