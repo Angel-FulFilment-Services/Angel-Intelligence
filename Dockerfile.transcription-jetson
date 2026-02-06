@@ -25,15 +25,17 @@ RUN apt-get update && \
         sox libsox-fmt-all ffmpeg libopenblas-dev git curl \
     && rm -rf /var/lib/apt/lists/*
 
-# Upgrade pip
-RUN pip install --upgrade pip setuptools wheel
+# Upgrade pip and reset index to PyPI (dustynv image has custom index)
+RUN pip config set global.index-url https://pypi.org/simple && \
+    pip config set global.extra-index-url https://pypi.org/simple && \
+    pip install --upgrade pip setuptools wheel
 
 # Copy requirements
 COPY requirements/base.txt requirements/
 COPY requirements/transcription.txt requirements/
 
 # Install dependencies (torch already in base image)
-RUN pip install --no-cache-dir -r requirements/transcription.txt
+RUN pip install --no-cache-dir --index-url https://pypi.org/simple -r requirements/transcription.txt
 
 # Install WhisperX with compatible faster-whisper
 RUN pip install faster-whisper==1.1.0 && \
