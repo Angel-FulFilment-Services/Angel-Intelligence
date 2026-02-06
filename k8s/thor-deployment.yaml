@@ -139,6 +139,12 @@ spec:
         - ip: "192.168.5.13"
           hostnames:
             - "afs-db02.angelfs.co.uk"
+        - ip: "192.168.0.239"
+          hostnames:
+            - "pbx.angelfs.co.uk"
+        - ip: "192.168.5.32"
+          hostnames:
+            - "afs-pbx-callarchive.angelfs.co.uk"
       
       # Schedule only on Thor nodes
       nodeSelector:
@@ -400,6 +406,12 @@ spec:
         - ip: "192.168.5.13"
           hostnames:
             - "afs-db02.angelfs.co.uk"
+        - ip: "192.168.0.239"
+          hostnames:
+            - "pbx.angelfs.co.uk"
+        - ip: "192.168.5.32"
+          hostnames:
+            - "afs-pbx-callarchive.angelfs.co.uk"
       
       nodeSelector:
         nvidia.com/gpu.product: "AGX-Thor"
