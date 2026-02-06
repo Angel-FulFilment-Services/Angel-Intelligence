@@ -470,22 +470,25 @@ Angel Intelligence uses modular Dockerfiles for minimal image sizes:
 cd ~/Angel-Intelligence
 export REGISTRY_IP=$(hostname -I | awk '{print $1}')
 
-# Setup buildx for cross-platform builds
-docker buildx create --use --name multiarch
+# Setup buildx for cross-platform builds (if not already done)
+docker buildx create --use --name multiarch 2>/dev/null || docker buildx use multiarch
 
-# Build and push Worker image (ARM64 for Thor)
+# Build Worker image (ARM64 for Thor)
+# Use --load to load locally, then push with docker push (respects insecure registry config)
 docker buildx build --platform linux/arm64 \
   -f Dockerfile.worker-jetson \
   -t ${REGISTRY_IP}:5000/angel-intelligence:worker-arm64 \
-  --push .
+  --load .
+docker push ${REGISTRY_IP}:5000/angel-intelligence:worker-arm64 # HERE
 
-# Build and push Transcription image (ARM64 for Thor)
+# Build Transcription image (ARM64 for Thor)
 docker buildx build --platform linux/arm64 \
   -f Dockerfile.transcription-jetson \
   -t ${REGISTRY_IP}:5000/angel-intelligence:transcription-arm64 \
-  --push .
+  --load .
+docker push ${REGISTRY_IP}:5000/angel-intelligence:transcription-arm64
 
-# Build and push API image (x86_64 for gateway)
+# Build API image (x86_64 for gateway - no buildx needed)
 docker build -f Dockerfile.api \
   -t ${REGISTRY_IP}:5000/angel-intelligence:api .
 docker push ${REGISTRY_IP}:5000/angel-intelligence:api
