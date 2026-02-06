@@ -35,6 +35,7 @@ RUN pip install --no-cache-dir --upgrade pip && \
 COPY src/api/ src/api/
 COPY src/config/ src/config/
 COPY src/database/ src/database/
+COPY src/services/ src/services/
 COPY src/__init__.py src/
 
 # Create non-root user

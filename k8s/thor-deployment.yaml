@@ -56,8 +56,11 @@ data:
   chat-model-quantization: "awq"
   
   # vLLM API Server - shared model server for all workers
-  llm-api-url: "http://vllm-server:8000/v1"
+  llm-api-url: "http://vllm-service:8000/v1"
   llm-api-key: ""  # Optional API key if vLLM requires auth
+  
+  # Transcription Service - shared WhisperX server
+  transcription-service-url: "http://transcription-service:8001"
   
   # LoRA adapter name for fine-tuned analysis (folder under /models/adapters/)
   analysis-adapter-name: "call-analysis"
@@ -285,6 +288,11 @@ spec:
             configMapKeyRef:
               name: angel-intelligence-thor-config
               key: llm-api-key
+        - name: TRANSCRIPTION_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: transcription-service-url
         - name: ANALYSIS_ADAPTER_NAME
           valueFrom:
             configMapKeyRef:
@@ -322,12 +330,13 @@ spec:
               key: cuda-visible-devices
 
         resources:
+          # NOTE: GPU resource removed - workers use vLLM + transcription services via HTTP
+          # GPU is shared via runtimeClassName: nvidia
           limits:
-            nvidia.com/gpu: 1
-            memory: "120Gi"  # Leave headroom for system
+            memory: "8Gi"
           requests:
-            memory: "64Gi"
-            cpu: "8"
+            memory: "4Gi"
+            cpu: "2"
 
         volumeMounts:
         - name: models
@@ -460,6 +469,11 @@ spec:
             configMapKeyRef:
               name: angel-intelligence-thor-config
               key: llm-api-key
+        - name: TRANSCRIPTION_SERVICE_URL
+          valueFrom:
+            configMapKeyRef:
+              name: angel-intelligence-thor-config
+              key: transcription-service-url
         - name: ANALYSIS_ADAPTER_NAME
           valueFrom:
             configMapKeyRef:
@@ -467,12 +481,13 @@ spec:
               key: analysis-adapter-name
 
         resources:
+          # NOTE: GPU resource removed - workers use vLLM service via HTTP
+          # GPU access via runtimeClassName: nvidia
           limits:
-            nvidia.com/gpu: 1
-            memory: "32Gi"  # 14B chat model only
+            memory: "8Gi"
           requests:
-            memory: "16Gi"
-            cpu: "4"
+            memory: "4Gi"
+            cpu: "2"
 
         volumeMounts:
         - name: models

@@ -53,11 +53,11 @@ RUN rm -f /usr/local/lib/python3.10/dist-packages/scikit_learn.libs/libgomp*.so*
 COPY src/api/app.py src/api/
 COPY src/api/auth.py src/api/
 COPY src/api/routes.py src/api/
+COPY src/api/routes_live.py src/api/
 COPY src/api/__init__.py src/api/
 COPY src/config/ src/config/
 COPY src/database/ src/database/
-COPY src/services/transcriber.py src/services/
-COPY src/services/__init__.py src/services/
+COPY src/services/ src/services/
 COPY src/__init__.py src/
 
 EXPOSE 8001
