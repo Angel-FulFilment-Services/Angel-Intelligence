@@ -97,7 +97,8 @@ metadata:
 spec:
   accessModes:
     - ReadWriteMany
-  # Use existing manually-bound PV (don't specify storageClassName for manual binding)
+  # Use existing manually-bound PV
+  storageClassName: ""
   volumeName: angel-models-pv
   resources:
     requests:
