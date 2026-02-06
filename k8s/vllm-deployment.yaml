@@ -138,6 +138,10 @@ spec:
                 configMapKeyRef:
                   name: vllm-config
                   key: LORA_MODULES_PATH
+          command:
+            - "python3"
+            - "-m"
+            - "vllm.entrypoints.openai.api_server"
           args:
             - "--model"
             - "$(MODEL_NAME)"

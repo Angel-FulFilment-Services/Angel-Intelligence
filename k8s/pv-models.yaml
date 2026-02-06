@@ -1,0 +1,30 @@
+# PersistentVolume and PVC for model storage (NFS)
+# This provides shared storage for models across all pods
+apiVersion: v1
+kind: PersistentVolume
+metadata:
+  name: angel-models-pv
+spec:
+  capacity:
+    storage: 100Gi
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  nfs:
+    server: 192.168.9.50  # Your NFS server IP
+    path: /exports/angel-models
+---
+# PVC for model adapters (used by vLLM and workers)
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: angel-intelligence-models
+  namespace: default
+spec:
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 100Gi
+  volumeName: angel-models-pv
+  storageClassName: ""  # Empty to use pre-created PV

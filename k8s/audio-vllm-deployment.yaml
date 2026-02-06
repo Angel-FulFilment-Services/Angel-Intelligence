@@ -73,7 +73,7 @@ spec:
     spec:
       containers:
         - name: vllm
-          image: vllm/vllm-openai:latest
+          image: 192.168.9.50:5000/angel-intelligence:vllm-arm64
           ports:
             - containerPort: 8000
               name: http
@@ -110,6 +110,10 @@ spec:
                 configMapKeyRef:
                   name: audio-vllm-config
                   key: MAX_NUM_SEQS
+          command:
+            - "python3"
+            - "-m"
+            - "vllm.entrypoints.openai.api_server"
           args:
             - "--model"
             - "$(MODEL_NAME)"
