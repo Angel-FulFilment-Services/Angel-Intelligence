@@ -86,7 +86,7 @@ data:
 apiVersion: v1
 kind: PersistentVolumeClaim
 metadata:
-  name: angel-intelligence-thor-models
+  name: angel-intelligence-models
   namespace: default
   labels:
     app: angel-intelligence
@@ -347,7 +347,7 @@ spec:
       volumes:
       - name: models
         persistentVolumeClaim:
-          claimName: angel-intelligence-thor-models
+          claimName: angel-intelligence-models
       - name: model-cache
         emptyDir:
           sizeLimit: 20Gi
@@ -483,7 +483,7 @@ spec:
       volumes:
       - name: models
         persistentVolumeClaim:
-          claimName: angel-intelligence-thor-models
+          claimName: angel-intelligence-models
       - name: model-cache
         emptyDir:
           sizeLimit: 10Gi

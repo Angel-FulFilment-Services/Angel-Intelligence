@@ -196,7 +196,7 @@ spec:
         # Adapters volume - shared with training job
         - name: adapters
           persistentVolumeClaim:
-            claimName: angel-intelligence-thor-models
+            claimName: angel-intelligence-models
       # Schedule on Thor node (has GPU)
       nodeSelector:
         nvidia.com/gpu.product: "AGX-Thor"
