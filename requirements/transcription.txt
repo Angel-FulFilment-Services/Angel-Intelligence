@@ -1,0 +1,62 @@
+# ==============================================================================
+# Angel Intelligence - Transcription Pod Requirements
+# ==============================================================================
+# Shared WhisperX transcription service with speaker diarization
+# Image size: ~4GB (includes torch, WhisperX, pyannote)
+#
+# Build: docker build -f Dockerfile.transcription -t angel-intelligence:transcription .
+# Run:   uvicorn src.api:app --host 0.0.0.0 --port 8001
+#
+# Memory: ~10GB VRAM per pod (medium model + diarization)
+# Throughput: ~72 calls/hour per pod
+
+# Include base dependencies
+-r base.txt
+
+# ------------------------------------------------------------------------------
+# Web Framework (serves /internal/transcribe endpoint)
+# ------------------------------------------------------------------------------
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+python-multipart==0.0.12
+
+# ------------------------------------------------------------------------------
+# Audio Processing
+# ------------------------------------------------------------------------------
+ffmpeg-python==0.2.0
+soundfile==0.12.1
+scipy==1.14.1
+
+# ------------------------------------------------------------------------------
+# PyTorch - Install FIRST before other dependencies
+# ------------------------------------------------------------------------------
+# For x86_64 with CUDA:
+#   pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+#
+# For Jetson (ARM64):
+#   Download from: https://developer.download.nvidia.com/compute/redist/jp/
+#   pip install torch-2.0.0+nv23.05-cp39-cp39-linux_aarch64.whl torchaudio==2.0.0
+
+# ------------------------------------------------------------------------------
+# WhisperX - Speech Recognition with Word-level Timestamps
+# ------------------------------------------------------------------------------
+faster-whisper==1.1.0
+ctranslate2==4.4.0
+
+# Install WhisperX from git (after torch):
+# pip install git+https://github.com/m-bain/whisperx.git
+
+# ------------------------------------------------------------------------------
+# Speaker Diarization (pyannote)
+# ------------------------------------------------------------------------------
+pyannote-audio==3.3.2
+
+# Note: Requires HuggingFace token with access to:
+# - pyannote/speaker-diarization-3.1
+# - pyannote/segmentation-3.0
+# Accept licenses at: https://huggingface.co/pyannote/speaker-diarization-3.1
+
+# ------------------------------------------------------------------------------
+# HuggingFace Hub (for model downloads)
+# ------------------------------------------------------------------------------
+huggingface-hub>=0.26.0

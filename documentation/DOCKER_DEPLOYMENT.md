@@ -192,10 +192,48 @@ volumes:
 
 ---
 
-## Dockerfile
+## Dockerfiles
+
+Angel Intelligence provides modular Dockerfiles for different pod types:
+
+| Dockerfile | Pod Type | Size | Description |
+|------------|----------|------|-------------|
+| `Dockerfile.api` | API | ~200MB | Lightweight API gateway |
+| `Dockerfile.worker` | Worker | ~400MB | HTTP orchestrator (shared services) |
+| `Dockerfile.transcription` | Transcription | ~4GB | WhisperX + diarization |
+| `Dockerfile.worker-jetson` | Worker (ARM64) | ~400MB | For Thor/Jetson |
+| `Dockerfile.transcription-jetson` | Transcription (ARM64) | ~4GB | For Thor/Jetson |
+| `Dockerfile` | Full (legacy) | ~8GB | All-in-one for development |
+
+### Build Pod-Specific Images
+
+```bash
+# API pod (lightweight)
+docker build -f Dockerfile.api -t angel-intelligence:api .
+
+# Worker pod (uses shared vLLM + Transcription services)
+docker build -f Dockerfile.worker -t angel-intelligence:worker .
+
+# Transcription pod (GPU required)
+docker build -f Dockerfile.transcription -t angel-intelligence:transcription .
+```
+
+### Build for ARM64 (Thor/Jetson)
+
+```bash
+# Worker for ARM64
+docker build -f Dockerfile.worker-jetson -t angel-intelligence:worker-arm64 .
+
+# Transcription for ARM64
+docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
+```
+
+### Legacy Full Dockerfile
+
+For development or standalone deployments:
 
 ```dockerfile
-# Dockerfile
+# Dockerfile (full installation)
 FROM python:3.11-slim
 
 # Install system dependencies

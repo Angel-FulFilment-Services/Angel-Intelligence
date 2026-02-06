@@ -26,6 +26,9 @@ python -m venv venv
 # Activate (Linux/macOS)
 source venv/bin/activate
 
+# Install PyTorch first (CUDA 12.1) - skip if using CPU/mock mode
+pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+
 # Install dependencies
 pip install -r requirements.txt
 ```

@@ -1,5 +1,13 @@
 # ==============================================================================
-# Angel Intelligence - Python Dependencies
+# Angel Intelligence - Full Installation (Development / Standalone)
+# ==============================================================================
+# This file installs ALL dependencies for local development or standalone mode.
+# For production Kubernetes, use modular files in requirements/ folder:
+#   - requirements/api.txt          (API pod - ~200MB)
+#   - requirements/worker.txt       (Worker pod - ~400MB) 
+#   - requirements/transcription.txt (Transcription pod - ~4GB)
+#
+# See requirements/README.md for details.
 # ==============================================================================
 
 # ------------------------------------------------------------------------------
@@ -16,7 +24,7 @@ httpx>=0.25.0  # HTTP client for service proxying
 # ------------------------------------------------------------------------------
 # Core Dependencies (PyTorch installed separately with CUDA)
 # ------------------------------------------------------------------------------
-numpy==2.0.2
+numpy>=1.19.0,<2.0.0
 
 # ------------------------------------------------------------------------------
 # PyTorch - Install FIRST before other dependencies:
@@ -70,22 +78,17 @@ qwen-omni-utils==0.0.6
 # python -m spacy download en_core_web_lg
 
 # ------------------------------------------------------------------------------
-# Voice Fingerprinting / Speaker Identification
-# ------------------------------------------------------------------------------
-# resemblyzer - DISABLED 
-
-# ------------------------------------------------------------------------------
 # WhisperX - Speech Recognition
 # Install last after all other dependencies
 # ------------------------------------------------------------------------------
 git+https://github.com/m-bain/whisperx.git
 
 # ------------------------------------------------------------------------------
-# Optional: Speaker Diarisation (requires HuggingFace token)
+# Speaker Diarisation (requires HuggingFace token)
 # ------------------------------------------------------------------------------
-# pyannote.audio==3.1.0
+pyannote-audio==3.3.2
 
 # ------------------------------------------------------------------------------
 # RealtimeSTT - Live Speech Recognition
 # ------------------------------------------------------------------------------
-pip install RealtimeSTT
+RealtimeSTT

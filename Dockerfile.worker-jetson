@@ -1,0 +1,49 @@
+# ==============================================================================
+# Angel Intelligence - Worker Pod Dockerfile (Jetson ARM64)
+# ==============================================================================
+# Lightweight HTTP orchestrator for Jetson / Thor
+# Calls vLLM and Transcription services via HTTP
+#
+# Build: docker build -f Dockerfile.worker-jetson -t angel-intelligence:worker-arm64 .
+
+FROM dustynv/l4t-pytorch:r35.2.1
+
+LABEL org.opencontainers.image.title="Angel Intelligence Worker (Jetson)"
+LABEL org.opencontainers.image.description="Lightweight call processing worker for ARM64"
+
+ENV LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1
+ENV PYTHONUNBUFFERED=1
+ENV ANGEL_ENV=production
+
+WORKDIR /workspace
+
+# Install Python 3.9
+RUN apt-get update && \
+    apt-get install -y software-properties-common && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y \
+        python3.9 python3.9-dev python3.9-distutils \
+        ffmpeg curl \
+    && rm -rf /var/lib/apt/lists/*
+
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.9 && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.9 1
+
+RUN python3.9 -m pip install --upgrade pip setuptools wheel
+
+# Copy requirements
+COPY requirements/base.txt requirements/
+COPY requirements/worker.txt requirements/
+
+# Install dependencies
+RUN python3.9 -m pip install --no-cache-dir -r requirements/worker.txt
+
+# Download small spaCy model
+RUN python3.9 -m spacy download en_core_web_sm
+
+# Copy application code
+COPY src/ src/
+
+CMD ["python3.9", "-m", "src.worker.worker"]

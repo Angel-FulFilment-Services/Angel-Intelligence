@@ -23,9 +23,11 @@ cd angel-intelligence
 python -m venv venv
 source venv/bin/activate  # or .\venv\Scripts\Activate.ps1 on Windows
 
+# Install PyTorch first (CUDA 12.1)
+pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+
 # Install dependencies
 pip install -r requirements.txt
-pip install -r requirements-dev.txt  # Dev tools
 
 # Configure environment
 cp .env.example .env

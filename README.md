@@ -123,6 +123,9 @@ python -m venv venv
 # Activate (Linux/Mac)
 source venv/bin/activate
 
+# Install PyTorch first (CUDA 12.1)
+pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+
 # Install dependencies
 pip install -r requirements.txt
 
@@ -136,6 +139,18 @@ choco install sox
 cp .env.example .env
 # Edit .env with your settings
 ```
+
+### Modular Requirements (Production Kubernetes)
+
+For production deployments, use pod-specific requirements from `requirements/`:
+
+| File | Pod Type | Size |
+|------|----------|------|
+| `requirements/api.txt` | API Gateway | ~200MB |
+| `requirements/worker.txt` | Worker (shared services) | ~400MB |
+| `requirements/transcription.txt` | Transcription | ~4GB |
+
+See [requirements/README.md](requirements/README.md) for details.
 
 ### Configuration
 

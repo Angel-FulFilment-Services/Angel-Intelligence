@@ -1,0 +1,49 @@
+# ==============================================================================
+# Angel Intelligence - API Pod Dockerfile
+# ==============================================================================
+# Minimal API server - no ML models, just HTTP routing
+# Image size: ~200MB
+#
+# Build: docker build -f Dockerfile.api -t angel-intelligence:api .
+# Run:   docker run -p 8000:8000 angel-intelligence:api
+
+FROM python:3.10-slim
+
+LABEL org.opencontainers.image.title="Angel Intelligence API"
+LABEL org.opencontainers.image.description="Lightweight API gateway"
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV ANGEL_ENV=production
+
+# Minimal system dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements
+COPY requirements/base.txt requirements/
+COPY requirements/api.txt requirements/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements/api.txt
+
+# Copy only necessary code
+COPY src/api/ src/api/
+COPY src/config/ src/config/
+COPY src/database/ src/database/
+COPY src/__init__.py src/
+
+# Create non-root user
+RUN useradd -m -u 1000 angel && chown -R angel:angel /app
+USER angel
+
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8000/health || exit 1
+
+EXPOSE 8000
+
+CMD ["uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8000"]

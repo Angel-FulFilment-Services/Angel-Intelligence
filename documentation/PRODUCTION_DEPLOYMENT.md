@@ -8,9 +8,13 @@ Deploy Angel Intelligence to a production Kubernetes cluster running on NVIDIA J
 # 1. Setup K3s cluster (if not already done)
 # See detailed steps below
 
-# 2. Build and push Docker image
-docker build -f Dockerfile.jetson -t your-registry/angel-intelligence:latest .
-docker push your-registry/angel-intelligence:latest
+# 2. Build and push Docker images (pod-specific)
+docker build -f Dockerfile.api -t your-registry/angel-intelligence:api .
+docker build -f Dockerfile.worker -t your-registry/angel-intelligence:worker .
+docker build -f Dockerfile.transcription -t your-registry/angel-intelligence:transcription .
+docker push your-registry/angel-intelligence:api
+docker push your-registry/angel-intelligence:worker
+docker push your-registry/angel-intelligence:transcription
 
 # 3. Configure secrets
 cp k8s/secret.yaml.example k8s/secret.yaml
@@ -236,7 +240,17 @@ ls /mnt/test
 sudo umount /mnt/test
 ```
 
-### Step 2.2: Build Docker Image
+### Step 2.2: Build Docker Images
+
+Angel Intelligence uses modular Dockerfiles for minimal image sizes:
+
+| Dockerfile | Pod Type | Size |
+|------------|----------|------|
+| `Dockerfile.api` | API Gateway | ~200MB |
+| `Dockerfile.worker` | Worker (shared services) | ~400MB |
+| `Dockerfile.transcription` | Transcription | ~4GB |
+| `Dockerfile.worker-jetson` | Worker (ARM64) | ~400MB |
+| `Dockerfile.transcription-jetson` | Transcription (ARM64) | ~4GB |
 
 **On your Kubernetes master server:**
 
@@ -250,21 +264,30 @@ cd Angel-Intelligence
 curl -fsSL https://get.docker.com -o get-docker.sh
 sudo sh get-docker.sh
 
-
-# Build Jetson image (ARM64)
-# Note: On x86 server, use buildx for cross-platform build
+# Build for ARM64 (Jetson)
 docker buildx create --use
+
+# Build Worker image (lightweight - uses shared services)
 docker buildx build --platform linux/arm64 \
-  -f Dockerfile.jetson \
-  -t angel-intelligence:jetson-latest \
+  -f Dockerfile.worker-jetson \
+  -t angel-intelligence:worker-arm64 \
+  --load .
+
+# Build Transcription image
+docker buildx build --platform linux/arm64 \
+  -f Dockerfile.transcription-jetson \
+  -t angel-intelligence:transcription-arm64 \
   --load .
 
 # OR build directly on one Jetson then export
 # On Jetson:
-# docker build -f Dockerfile.jetson -t angel-intelligence:jetson-latest .
-# docker save angel-intelligence:jetson-latest | gzip > angel-jetson.tar.gz
+# docker build -f Dockerfile.worker-jetson -t angel-intelligence:worker-arm64 .
+# docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
+# docker save angel-intelligence:worker-arm64 | gzip > worker-arm64.tar.gz
+# docker save angel-intelligence:transcription-arm64 | gzip > transcription-arm64.tar.gz
 # Copy to master server and load:
-# docker load < angel-jetson.tar.gz
+# docker load < worker-arm64.tar.gz
+# docker load < transcription-arm64.tar.gz
 ```
 
 **OR use local registry on cluster:**

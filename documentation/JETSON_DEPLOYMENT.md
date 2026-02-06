@@ -2,6 +2,8 @@
 
 Complete guide for deploying Angel Intelligence on NVIDIA Jetson devices (Orin Nano, AGX Orin, Jetson Thor).
 
+For Thor-only deployments with shared services architecture, see [THOR_DEPLOYMENT.md](THOR_DEPLOYMENT.md).
+
 ## Quick Start
 
 ```bash
@@ -22,6 +24,26 @@ sudo docker-compose -f docker-compose.jetson.yml logs -f
 # Check status
 curl http://localhost:8080/health
 ```
+
+## Modular Docker Images
+
+For production Kubernetes deployments, use pod-specific Dockerfiles:
+
+| Dockerfile | Pod Type | Size | Description |
+|------------|----------|------|-------------|
+| `Dockerfile.worker-jetson` | Worker | ~400MB | HTTP orchestrator (uses shared vLLM/Transcription) |
+| `Dockerfile.transcription-jetson` | Transcription | ~4GB | WhisperX + pyannote |
+
+Build commands:
+```bash
+# Worker image (lightweight - calls shared services)
+docker build -f Dockerfile.worker-jetson -t angel-intelligence:worker-arm64 .
+
+# Transcription image (GPU required)
+docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
+```
+
+See [requirements/README.md](../requirements/README.md) for details on modular requirements.
 
 ## Hardware Requirements
 

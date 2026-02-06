@@ -132,10 +132,26 @@ venv\Scripts\activate.bat
 
 ## Step 5: Install Python Dependencies
 
-### Standard Installation (CPU or CUDA 12.4)
+### Choose Your Installation Type
+
+Angel Intelligence provides modular requirements for different deployment scenarios:
+
+| File | Use Case | Size |
+|------|----------|------|
+| `requirements.txt` | Local development / standalone | Full |
+| `requirements/api.txt` | API pod only | ~200MB |
+| `requirements/worker.txt` | Worker pod (shared services) | ~400MB |
+| `requirements/transcription.txt` | Transcription pod | ~4GB |
+
+### Local Development (Full Installation)
 
 ```bash
 pip install --upgrade pip wheel setuptools
+
+# Install PyTorch first (CUDA 12.1)
+pip install torch==2.5.1 torchaudio==2.5.1 --index-url https://download.pytorch.org/whl/cu121
+
+# Install all dependencies
 pip install -r requirements.txt
 ```
 

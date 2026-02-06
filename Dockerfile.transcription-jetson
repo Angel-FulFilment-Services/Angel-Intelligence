@@ -1,0 +1,68 @@
+# ==============================================================================
+# Angel Intelligence - Transcription Pod Dockerfile (Jetson ARM64)
+# ==============================================================================
+# Shared WhisperX transcription service for NVIDIA Jetson / Thor
+# Image size: ~4GB (torch + WhisperX + pyannote)
+#
+# Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
+# Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
+
+FROM dustynv/l4t-pytorch:r35.2.1
+
+LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Jetson)"
+LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
+
+# Fix ARM64 OpenMP TLS issue
+ENV LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1
+ENV PYTHONUNBUFFERED=1
+ENV ANGEL_ENV=production
+
+WORKDIR /workspace
+
+# Install Python 3.9
+RUN apt-get update && \
+    apt-get install -y software-properties-common && \
+    add-apt-repository ppa:deadsnakes/ppa && \
+    apt-get update && \
+    apt-get install -y \
+        python3.9 python3.9-dev python3.9-distutils python3.9-venv \
+        sox libsox-fmt-all ffmpeg libopenblas-dev git curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install pip for Python 3.9
+RUN curl -sS https://bootstrap.pypa.io/get-pip.py | python3.9 && \
+    update-alternatives --install /usr/bin/python3 python3 /usr/bin/python3.9 1 && \
+    update-alternatives --install /usr/bin/python python /usr/bin/python3.9 1
+
+# Upgrade pip
+RUN python3.9 -m pip install --upgrade pip setuptools wheel
+
+# Copy requirements
+COPY requirements/base.txt requirements/
+COPY requirements/transcription.txt requirements/
+
+# Install dependencies (torch already in base image)
+RUN python3.9 -m pip install --no-cache-dir -r requirements/transcription.txt
+
+# Install WhisperX with compatible faster-whisper
+RUN python3.9 -m pip install faster-whisper==1.1.0 && \
+    python3.9 -m pip install git+https://github.com/m-bain/whisperx.git --no-deps && \
+    python3.9 -m pip install pyannote.audio
+
+# Fix scikit-learn's bundled libgomp TLS conflict
+RUN rm -f /usr/local/lib/python3.9/dist-packages/scikit_learn.libs/libgomp*.so* 2>/dev/null || true && \
+    ln -sf /usr/lib/aarch64-linux-gnu/libgomp.so.1 /usr/local/lib/python3.9/dist-packages/scikit_learn.libs/libgomp-d22c30c5.so.1.0.0 2>/dev/null || true
+
+# Copy only necessary code
+COPY src/api/app.py src/api/
+COPY src/api/routes.py src/api/
+COPY src/api/__init__.py src/api/
+COPY src/config/ src/config/
+COPY src/database/ src/database/
+COPY src/services/transcriber.py src/services/
+COPY src/services/__init__.py src/services/
+COPY src/__init__.py src/
+
+EXPOSE 8001
+
+CMD ["python3.9", "-m", "uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8001"]

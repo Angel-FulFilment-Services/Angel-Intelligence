@@ -1,7 +1,14 @@
 # ==============================================================================
-# Angel Intelligence - Jetson Dependencies (Python 3.8 Compatible)
+# Angel Intelligence - Jetson Dependencies (Full Installation - Legacy)
 # ==============================================================================
-# Use this file for NVIDIA Jetson devices with Python 3.8
+# This file is for standalone Jetson deployments with LOCAL models.
+#
+# For production Kubernetes with shared services, use modular files:
+#   - requirements/worker.txt       (Worker pod - lightweight HTTP client)
+#   - requirements/transcription.txt (Transcription pod - WhisperX)
+#
+# See requirements/README.md for details.
+# ==============================================================================
 
 # ------------------------------------------------------------------------------
 # Core Dependencies (Python 3.8 compatible versions)

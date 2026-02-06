@@ -1,0 +1,49 @@
+# ==============================================================================
+# Angel Intelligence - Worker Pod Dockerfile (Shared Services Mode)
+# ==============================================================================
+# Lightweight HTTP orchestrator - calls vLLM and Transcription via HTTP
+# Image size: ~400MB (no torch/transformers)
+#
+# Build: docker build -f Dockerfile.worker -t angel-intelligence:worker .
+# Run:   docker run angel-intelligence:worker
+#
+# Required environment:
+#   LLM_API_URL=http://vllm-server:8000/v1
+#   TRANSCRIPTION_SERVICE_URL=http://transcription-service:8001
+
+FROM python:3.10-slim
+
+LABEL org.opencontainers.image.title="Angel Intelligence Worker"
+LABEL org.opencontainers.image.description="Lightweight call processing worker"
+
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV ANGEL_ENV=production
+
+# System dependencies for audio handling and PII
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ffmpeg \
+    curl \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copy requirements
+COPY requirements/base.txt requirements/
+COPY requirements/worker.txt requirements/
+
+# Install Python dependencies
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements/worker.txt
+
+# Download small spaCy model for PII (saves ~200MB vs large model)
+RUN python -m spacy download en_core_web_sm
+
+# Copy application code
+COPY src/ src/
+
+# Create non-root user
+RUN useradd -m -u 1000 angel && chown -R angel:angel /app
+USER angel
+
+CMD ["python", "-m", "src.worker.worker"]
