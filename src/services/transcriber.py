@@ -181,9 +181,6 @@ class TranscriptionService:
         
         logger.info(f"Transcribing via proxy: {audio_path}")
         
-        # Run async proxy call in sync context
-        loop = asyncio.get_event_loop() if asyncio.get_event_loop().is_running() else asyncio.new_event_loop()
-        
         async def _do_transcribe():
             result = await proxy.transcribe(
                 audio_path=audio_path,
@@ -192,19 +189,23 @@ class TranscriptionService:
             )
             return result
         
-        # Handle both sync and async contexts
+        # Run async proxy call in sync context
+        # Use asyncio.run() which handles event loop creation properly
         try:
-            if asyncio.get_event_loop().is_running():
-                # We're in an async context, create a new thread to run the async call
+            # Check if we're already in an async context
+            try:
+                loop = asyncio.get_running_loop()
+                # We're in an async context - use thread pool to avoid nested event loop
                 import concurrent.futures
                 with concurrent.futures.ThreadPoolExecutor() as executor:
                     future = executor.submit(asyncio.run, _do_transcribe())
                     result = future.result(timeout=300)
-            else:
+            except RuntimeError:
+                # No running event loop - safe to use asyncio.run()
                 result = asyncio.run(_do_transcribe())
-        except RuntimeError:
-            # No event loop, create one
-            result = asyncio.run(_do_transcribe())
+        except Exception as e:
+            logger.error(f"Proxy transcription error: {e}")
+            raise
         
         logger.info(f"Proxy transcription complete: {len(result.segments)} segments, {result.processing_time:.1f}s")
         
