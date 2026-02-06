@@ -67,9 +67,14 @@ spec:
           value: "production"
         - name: WORKER_MODE
           value: "api"
-        # Interactive service URL for AI request proxying
-        - name: INTERACTIVE_SERVICE_URL
-          value: "http://angel-intelligence-interactive:8000"
+        # vLLM API URL for chat/analysis proxying (Thor deployment)
+        - name: LLM_API_URL
+          value: "http://vllm-server.default.svc.cluster.local:8000/v1"
+        - name: LLM_API_KEY
+          value: "not-needed"
+        # Transcription service URL
+        - name: TRANSCRIPTION_SERVICE_URL
+          value: "http://transcription-service.default.svc.cluster.local:8001"
         - name: PRELOAD_CHAT_MODEL
           value: "false"
         
@@ -105,52 +110,27 @@ spec:
               name: angel-intelligence-secrets
               key: db-password
 
-        # ConfigMap values
-        - name: WHISPER_MODEL
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-config
-              key: whisper-model
-        - name: WHISPER_MODEL_PATH
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-config
-              key: whisper-model-path
-        - name: ANALYSIS_MODEL
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-config
-              key: analysis-model
-        - name: ANALYSIS_MODEL_PATH
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-config
-              key: analysis-model-path
-        - name: ANALYSIS_MODEL_QUANTIZATION
-          valueFrom:
-            configMapKeyRef:
-              name: angel-intelligence-config
-              key: analysis-model-quantization
+        # ConfigMap values (using thor config)
         - name: CHAT_MODEL
           valueFrom:
             configMapKeyRef:
-              name: angel-intelligence-config
+              name: angel-intelligence-thor-config
               key: chat-model
         - name: CHAT_MODEL_PATH
           valueFrom:
             configMapKeyRef:
-              name: angel-intelligence-config
+              name: angel-intelligence-thor-config
               key: chat-model-path
         - name: CHAT_MODEL_QUANTIZATION
           valueFrom:
             configMapKeyRef:
-              name: angel-intelligence-config
+              name: angel-intelligence-thor-config
               key: chat-model-quantization
-        - name: CUDA_VISIBLE_DEVICES
+        - name: ANALYSIS_ADAPTER_NAME
           valueFrom:
             configMapKeyRef:
-              name: angel-intelligence-config
-              key: cuda-visible-devices
+              name: angel-intelligence-thor-config
+              key: analysis-adapter-name
 
         resources:
           requests:
