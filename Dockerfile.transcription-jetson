@@ -28,7 +28,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sox libsox-fmt-all \
     && rm -rf /var/lib/apt/lists/*
 
-# PyTorch and torchaudio are already installed in the NGC container
+# PyTorch is already installed in the NGC container
+# Install torchaudio from Jetson AI Lab pip server (compatible with container's PyTorch)
+RUN pip install --no-cache-dir torchaudio --index-url https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple/
+
 # Verify they're working
 RUN python3 -c "import torch; print('PyTorch:', torch.__version__); import torchaudio; print('torchaudio:', torchaudio.__version__)"
 
