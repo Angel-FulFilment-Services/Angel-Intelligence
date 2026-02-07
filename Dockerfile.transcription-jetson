@@ -21,17 +21,9 @@ ENV ANGEL_ENV=production
 
 WORKDIR /workspace
 
-# Add NVIDIA HPC SDK repo for NVPL (required by SBSA PyTorch wheels)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        gnupg2 \
-        ca-certificates \
-        curl \
-    && curl -fsSL https://developer.download.nvidia.com/hpc-sdk/ubuntu/DEB-GPG-KEY-NVIDIA-HPC-SDK | gpg --dearmor -o /usr/share/keyrings/nvidia-hpcsdk-keyring.gpg \
-    && echo "deb [signed-by=/usr/share/keyrings/nvidia-hpcsdk-keyring.gpg] https://developer.download.nvidia.com/hpc-sdk/ubuntu/aarch64 /" > /etc/apt/sources.list.d/nvidia-hpcsdk.list \
-    && apt-get update
-
 # Install system dependencies including Python 3.12, ffmpeg, build tools, and NVPL
-RUN apt-get install -y --no-install-recommends \
+# NVPL (NVIDIA Performance Libraries) is available in the CUDA sbsa repo included in base image
+RUN apt-get update && apt-get install -y --no-install-recommends \
         python3.12 \
         python3.12-dev \
         python3.12-venv \
@@ -41,13 +33,14 @@ RUN apt-get install -y --no-install-recommends \
         git \
         curl \
         build-essential \
-        nvpl \
+        libnvpl-lapack0 \
+        libnvpl-blas0 \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.12 /usr/bin/python
 
-# Set library path to find NVPL
-ENV LD_LIBRARY_PATH="/opt/nvidia/nvpl/lib:${LD_LIBRARY_PATH}"
+# Set library path to find NVPL (usually in /usr/lib/aarch64-linux-gnu)
+ENV LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}"
 
 # Create and activate virtual environment
 RUN python3 -m venv /opt/venv
