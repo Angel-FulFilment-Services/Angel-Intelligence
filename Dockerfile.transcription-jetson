@@ -1,13 +1,14 @@
 # ==============================================================================
 # Angel Intelligence - Transcription Pod Dockerfile (Jetson ARM64 / Thor)
 # ==============================================================================
-# Uses the already-working vllm-arm64 image from local registry as base
+# Uses dustynv/whisperx which has WhisperX + PyAnnote + CUDA all working
+# Build whisperx first: jetson-containers build whisperx
 #
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-# Use local registry vLLM image that we KNOW works with CUDA
-FROM 192.168.9.50:5000/angel-intelligence:vllm-arm64
+# Use whisperx image from local registry (built via jetson-containers)
+FROM 192.168.9.50:5000/angel-intelligence:whisperx-arm64
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Thor/Jetson)"
 LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
@@ -18,47 +19,18 @@ ENV ANGEL_ENV=production
 
 WORKDIR /workspace
 
-# Install ffmpeg for audio processing
-RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
-    && rm -rf /var/lib/apt/lists/*
-
-# Verify CUDA works in base
-RUN python3 -c "import torch; assert torch.cuda.is_available(), 'Base has no CUDA!'; print('Base CUDA: OK')"
-
-# Install faster-whisper (has its own ctranslate2 backend, doesn't need torch for inference)
-RUN pip install --no-cache-dir faster-whisper
-
-# Install pyannote for diarization - with --no-deps to avoid breaking torch/pydantic
-RUN pip install --no-cache-dir --no-deps pyannote.audio pyannote.core pyannote.database pyannote.pipeline
-
-# Install pyannote dependencies that DON'T touch torch/pydantic
-RUN pip install --no-cache-dir --no-deps asteroid-filterbanks speechbrain
-RUN pip install --no-cache-dir einops hmmlearn optuna tensorboardX
-
-# Install lightning with --no-deps to avoid torch overwrite, then its deps
-RUN pip install --no-cache-dir --no-deps lightning pytorch-lightning
-RUN pip install --no-cache-dir fsspec torchmetrics
-
-# Install torchaudio from Jetson pip server (compatible with NGC torch)
-RUN pip install --no-cache-dir torchaudio \
-    --index-url https://pypi.jetson-ai-lab.io/jp6/cu128/+simple/ \
-    --extra-index-url https://pypi.org/simple || \
-    pip install --no-cache-dir --no-deps torchaudio
-RUN pip install --no-cache-dir soundfile
-
-# Install base app dependencies (avoiding pydantic/torch overwrites)
+# Install app dependencies (whisperx base already has torch, torchaudio, pyannote, faster-whisper)
 RUN pip install --no-cache-dir \
     mysql-connector-python \
     httpx \
     aiofiles \
     python-multipart \
-    boto3 \
-    python-dotenv \
-    requests \
-    "numpy>=1.19.0,<2.0.0"
+    boto3
 
-# Final CUDA check
-RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA broken!'; print('Final CUDA: OK')"
+# Verify everything works
+RUN python3 -c "import torch; assert torch.cuda.is_available(), 'No CUDA!'; print('CUDA OK')"
+RUN python3 -c "from faster_whisper import WhisperModel; print('faster-whisper OK')"
+RUN python3 -c "from pyannote.audio import Pipeline; print('pyannote OK')"
 
 # Copy application code
 COPY src/ src/
