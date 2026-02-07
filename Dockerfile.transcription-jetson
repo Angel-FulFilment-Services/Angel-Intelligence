@@ -7,10 +7,10 @@
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-# Official NVIDIA PyTorch NGC container for integrated GPU (Thor/Jetson)
-# -igpu suffix = integrated GPU support (includes all CUDA/cuDNN/NVPL libraries)
+# Official NVIDIA PyTorch NGC container for ARM64
+# Use standard py3 tag (not igpu) - igpu has USE_CUDA=0
 # See: https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch/tags
-FROM nvcr.io/nvidia/pytorch:26.01-py3-igpu
+FROM nvcr.io/nvidia/pytorch:26.01-py3
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Thor/Jetson)"
 LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
