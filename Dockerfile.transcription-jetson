@@ -28,16 +28,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sox libsox-fmt-all \
     && rm -rf /var/lib/apt/lists/*
 
-# Set CUDA library paths (NGC container has CUDA in /usr/local/cuda)
-ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/compat:${LD_LIBRARY_PATH}"
+# PyTorch is already installed in the NGC container (GPU-accelerated)
+# Install torchaudio - pyannote only needs it for AudioMetaData, not GPU audio processing
+# The heavy lifting (transcription) uses faster-whisper which has its own CUDA support
+RUN pip install --no-cache-dir torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
 
-# PyTorch is already installed in the NGC container
-# Check where CUDA libs are and install compatible torchaudio
-RUN find /usr -name "libcudart*" 2>/dev/null | head -5 || echo "No libcudart found"
-RUN pip install --no-cache-dir torchaudio --index-url https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple/
-
-# Verify they're working
-RUN python3 -c "import torch; print('PyTorch:', torch.__version__); import torchaudio; print('torchaudio:', torchaudio.__version__)"
+# Verify PyTorch works (torchaudio may fail at build time but work at runtime with GPU access)
+RUN python3 -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.cuda.is_available())"
 
 # Copy requirements
 COPY requirements/base.txt requirements/
