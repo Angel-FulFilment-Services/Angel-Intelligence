@@ -89,6 +89,10 @@ spec:
       # Use NVIDIA runtime for GPU access
       runtimeClassName: nvidia
       
+      # Force scheduling on Thor (has GPU with 128GB unified memory)
+      nodeSelector:
+        nvidia.com/gpu.product: "AGX-Thor"
+      
       # Spread replicas across nodes if multiple GPUs/nodes available
       affinity:
         podAntiAffinity:
@@ -170,9 +174,9 @@ spec:
               key: huggingface-token
 
         resources:
-          # NOTE: GPU resource removed to allow sharing with vLLM on Thor
-          # WhisperX will still use CUDA via runtimeClassName: nvidia
-          # Each model uses ~10GB VRAM (medium) which fits alongside vLLM (~40GB)
+          # GPU access via runtimeClassName: nvidia (shares GPU with vLLM on Thor)
+          # Thor's unified memory allows multiple CUDA processes
+          # Do NOT request nvidia.com/gpu to avoid exclusive allocation
           limits:
             memory: "16Gi"
           requests:
