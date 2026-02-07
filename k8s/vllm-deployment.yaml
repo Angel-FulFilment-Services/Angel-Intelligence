@@ -93,10 +93,12 @@ spec:
       
       containers:
         - name: vllm
-          image: 192.168.9.50:5000/angel-intelligence:vllm-arm64
+          image: 192.168.9.50:5000/angel-intelligence:vllm-transcription-arm64
           ports:
             - containerPort: 8000
               name: http
+            - containerPort: 8001
+              name: transcription
           env:
             - name: HF_HOME
               value: "/models"
@@ -160,31 +162,26 @@ spec:
                 configMapKeyRef:
                   name: vllm-config
                   key: LORA_MODULES_PATH
+            # Transcription env vars
+            - name: WHISPER_MODEL
+              value: "large-v3"
+            - name: WHISPER_MODEL_PATH
+              value: "/models/whisper/faster-whisper-large-v3"
+            - name: HUGGINGFACE_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: angel-intelligence-secrets
+                  key: huggingface-token
+            - name: VLLM_MODEL
+              valueFrom:
+                configMapKeyRef:
+                  name: vllm-config
+                  key: MODEL_NAME
+          # Run supervisor which starts both vLLM and transcription
           command:
-            - "python3"
-            - "-m"
-            - "vllm.entrypoints.openai.api_server"
-          args:
-            - "--model"
-            - "$(MODEL_NAME)"
-            - "--max-model-len"
-            - "$(MAX_MODEL_LEN)"
-            - "--gpu-memory-utilization"
-            - "$(GPU_MEMORY_UTILIZATION)"
-            - "--tensor-parallel-size"
-            - "$(TENSOR_PARALLEL_SIZE)"
-            - "--max-num-seqs"
-            - "$(MAX_NUM_SEQS)"
-            - "--enable-lora"
-            - "--max-loras"
-            - "$(MAX_LORAS)"
-            - "--max-lora-rank"
-            - "$(MAX_LORA_RANK)"
-            - "--trust-remote-code"
-            - "--host"
-            - "0.0.0.0"
-            - "--port"
-            - "8000"
+            - "/usr/bin/supervisord"
+            - "-c"
+            - "/etc/supervisor/supervisord.conf"
           volumeMounts:
             - name: model-cache
               mountPath: /models
@@ -252,6 +249,9 @@ spec:
     - name: http
       port: 8000
       targetPort: 8000
+    - name: transcription
+      port: 8001
+      targetPort: 8001
   type: ClusterIP
 
 ---
