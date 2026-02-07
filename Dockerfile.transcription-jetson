@@ -39,6 +39,10 @@ RUN pip install --no-cache-dir einops hmmlearn optuna tensorboardX
 RUN pip install --no-cache-dir --no-deps lightning pytorch-lightning
 RUN pip install --no-cache-dir fsspec torchmetrics
 
+# Install torchaudio (--no-deps to avoid torch overwrite)
+RUN pip install --no-cache-dir --no-deps torchaudio
+RUN pip install --no-cache-dir soundfile
+
 # Install base app dependencies (avoiding pydantic/torch overwrites)
 RUN pip install --no-cache-dir \
     mysql-connector-python \
