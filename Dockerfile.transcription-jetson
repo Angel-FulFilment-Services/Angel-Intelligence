@@ -1,16 +1,13 @@
 # ==============================================================================
 # Angel Intelligence - Transcription Pod Dockerfile (Jetson ARM64 / Thor)
 # ==============================================================================
-# For L4T R38 / JetPack 7 with CUDA 13.0
-# Uses official NVIDIA PyTorch NGC container for integrated GPU (Thor/Jetson)
+# Uses NGC vLLM base which has working CUDA-enabled PyTorch on Thor
 #
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-# Official NVIDIA PyTorch NGC container for ARM64
-# Use standard py3 tag (not igpu) - igpu has USE_CUDA=0
-# See: https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch/tags
-FROM nvcr.io/nvidia/pytorch:26.01-py3
+# Use NGC vLLM - same base as working vllm-arm64 image (has CUDA PyTorch)
+FROM nvcr.io/nvidia/vllm:26.01-py3
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Thor/Jetson)"
 LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
@@ -28,12 +25,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sox libsox-fmt-all \
     && rm -rf /var/lib/apt/lists/*
 
-# PyTorch is already installed in the NGC container (GPU-accelerated)
-# Install torchaudio - pyannote only needs it for AudioMetaData, not GPU audio processing
-# The heavy lifting (transcription) uses faster-whisper which has its own CUDA support
-RUN pip install --no-cache-dir torchaudio --extra-index-url https://download.pytorch.org/whl/cpu
+# Install torchaudio from Jetson pip server (matches base PyTorch)
+RUN pip install --no-cache-dir torchaudio \
+    --index-url https://pypi.jetson-ai-lab.io/jp6/cu128/+simple/ \
+    --extra-index-url https://pypi.org/simple
 
-# Verify PyTorch works (torchaudio may fail at build time but work at runtime with GPU access)
+# Verify PyTorch has CUDA
 RUN python3 -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.cuda.is_available())"
 
 # Copy requirements
@@ -66,4 +63,6 @@ COPY src/__init__.py src/
 
 EXPOSE 8001
 
-CMD ["python3", "-m", "uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8001"]
+# Run with multiple workers for concurrent request handling
+# Thread pool handles GPU work, workers handle I/O parallelism
+CMD ["python3", "-m", "uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]

@@ -2864,10 +2864,16 @@ async def internal_transcribe(request: InternalTranscribeRequest):
             # Get transcription service
             service = get_transcription_service()
             
-            # Transcribe
-            result = service.transcribe(
-                audio_path=tmp_path,
-                diarize=request.diarize,
+            # Run transcription in thread pool to allow concurrent requests
+            # GPU will serialize automatically, but I/O and preprocessing overlaps
+            import asyncio
+            loop = asyncio.get_event_loop()
+            result = await loop.run_in_executor(
+                None,  # Default thread pool
+                lambda: service.transcribe(
+                    audio_path=tmp_path,
+                    diarize=request.diarize,
+                )
             )
             
             processing_time = time.time() - start_time
