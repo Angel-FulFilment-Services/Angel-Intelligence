@@ -1,83 +1,49 @@
 # ==============================================================================
 # Angel Intelligence - Transcription Pod Dockerfile (Jetson ARM64 / Thor)
 # ==============================================================================
-# Uses NGC vLLM base which has working CUDA-enabled PyTorch on Thor
+# Uses the already-working vllm-arm64 image from local registry as base
 #
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-# Use NGC vLLM - same base as working vllm-arm64 image (has CUDA PyTorch)
-FROM nvcr.io/nvidia/vllm:26.01-py3
+# Use local registry vLLM image that we KNOW works with CUDA
+FROM 192.168.9.50:5000/angel-intelligence:vllm-arm64
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Thor/Jetson)"
 LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
 
-# Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV ANGEL_ENV=production
 
 WORKDIR /workspace
 
-# Install additional system dependencies (ffmpeg for whisperx audio loading)
-RUN apt-get update && apt-get install -y --no-install-recommends \
-        ffmpeg \
-        sox libsox-fmt-all \
+# Install ffmpeg for audio processing
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-# Verify base image has CUDA PyTorch
-RUN python3 -c "import torch; print('Base PyTorch:', torch.__version__, 'CUDA:', torch.cuda.is_available())"
+# Verify CUDA works in base
+RUN python3 -c "import torch; assert torch.cuda.is_available(), 'Base has no CUDA!'; print('Base CUDA: OK')"
 
-# Pin torch version to prevent overwrites, then install audio deps
-# Use --no-deps on packages that might pull torch
-RUN TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)") && \
-    pip install --no-cache-dir --no-deps torchaudio && \
-    pip install --no-cache-dir soundfile
-
-# Verify CUDA still works after torchaudio
-RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA broken after torchaudio!'; print('CUDA OK')"
-
-# Copy requirements
-COPY requirements/base.txt requirements/
-COPY requirements/transcription.txt requirements/
-
-# Install WhisperX dependencies (no-deps to avoid torch overwrite)
+# Install faster-whisper (has its own ctranslate2 backend, doesn't need torch for inference)
 RUN pip install --no-cache-dir faster-whisper
-RUN pip install --no-cache-dir git+https://github.com/m-bain/whisperx.git --no-deps
 
-# Install pyannote with --no-deps, then install its deps manually (excluding torch)
+# Install pyannote for diarization - with --no-deps to avoid breaking torch/pydantic
 RUN pip install --no-cache-dir --no-deps pyannote.audio pyannote.core pyannote.database pyannote.pipeline
 
-# Check CUDA after pyannote core
-RUN python3 -c "import torch; print('After pyannote:', torch.cuda.is_available())"
+# Install pyannote dependencies that DON'T touch torch/pydantic
+RUN pip install --no-cache-dir --no-deps asteroid-filterbanks speechbrain
+RUN pip install --no-cache-dir einops hmmlearn optuna tensorboardX
 
-# Install deps one by one to find the breaker
-RUN pip install --no-cache-dir asteroid-filterbanks einops hmmlearn
-RUN python3 -c "import torch; print('After batch 1:', torch.cuda.is_available())"
+# Final CUDA check
+RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA broken!'; print('Final CUDA: OK')"
 
-RUN pip install --no-cache-dir omegaconf pytorch-metric-learning rich scikit-learn scipy semver
-RUN python3 -c "import torch; print('After batch 2:', torch.cuda.is_available())"
+# Copy application code
+COPY src/ src/
 
-RUN pip install --no-cache-dir tensorboardX 2>/dev/null || true
-RUN python3 -c "import torch; print('After tensorboardX:', torch.cuda.is_available())"
+EXPOSE 8001
 
-RUN pip install --no-cache-dir --no-deps lightning 2>/dev/null || true
-RUN python3 -c "import torch; print('After lightning:', torch.cuda.is_available())"
-
-RUN pip install --no-cache-dir --no-deps speechbrain 2>/dev/null || true
-RUN python3 -c "import torch; print('After speechbrain:', torch.cuda.is_available())"
-
-# Verify CUDA still works after all installs
-RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA broken!'; print('Final CUDA check: OK')"
-
-# Install minimal WhisperX deps and other transcription dependencies
-RUN pip install --no-cache-dir pandas nltk more-itertools
-RUN pip install --no-cache-dir --no-deps -r requirements/transcription.txt 2>/dev/null || true
-
-# Copy only necessary code
-COPY src/api/app.py src/api/
-COPY src/api/auth.py src/api/
-COPY src/api/routes.py src/api/
+CMD ["python3", "-m", "uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]
 COPY src/api/routes_live.py src/api/
 COPY src/api/__init__.py src/api/
 COPY src/config/ src/config/
