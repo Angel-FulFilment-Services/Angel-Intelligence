@@ -7,9 +7,10 @@
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-# Use L4T PyTorch image with torchaudio 2.1+ for pyannote-audio 3.3.x compatibility
-# r36.2.0 includes PyTorch 2.1+ with compatible torchaudio
-FROM dustynv/l4t-pytorch:r36.2.0
+# Use dustynv PyTorch image with PyTorch 2.7 + torchaudio 2.7 (compatible with pyannote-audio 3.3.x)
+# For L4T R38 (JetPack 7), use r36.4 images which are backward compatible
+# See: https://hub.docker.com/r/dustynv/pytorch/tags
+FROM dustynv/pytorch:2.7-r36.4.0-cu128-24.04
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Jetson)"
 LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
