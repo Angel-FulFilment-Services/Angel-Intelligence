@@ -2,17 +2,18 @@
 # Angel Intelligence - Transcription Pod Dockerfile (Jetson ARM64 / Thor)
 # ==============================================================================
 # For L4T R38 / JetPack 7 with CUDA 13.0
-# Uses pip wheels from pypi.jetson-ai-lab.io/sbsa/cu130
+# Uses official NVIDIA PyTorch NGC container for integrated GPU (Thor/Jetson)
 #
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-# NVIDIA CUDA 13.0 devel image with cuDNN for ARM64 (Thor/Grace Hopper)
-# Must match CUDA version of the torch wheels from pypi.jetson-ai-lab.io/sbsa/cu130
-FROM nvidia/cuda:13.0.1-cudnn-devel-ubuntu24.04
+# Official NVIDIA PyTorch NGC container for integrated GPU (Thor/Jetson)
+# -igpu suffix = integrated GPU support (includes all CUDA/cuDNN/NVPL libraries)
+# See: https://catalog.ngc.nvidia.com/orgs/nvidia/containers/pytorch/tags
+FROM nvcr.io/nvidia/pytorch:26.01-py3-igpu
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Thor/Jetson)"
-LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64 CUDA 13.0"
+LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
 
 # Prevent interactive prompts during package installation
 ENV DEBIAN_FRONTEND=noninteractive
@@ -21,55 +22,28 @@ ENV ANGEL_ENV=production
 
 WORKDIR /workspace
 
-# Install system dependencies including Python 3.12, ffmpeg, build tools, and NVPL
-# NVPL (NVIDIA Performance Libraries) is available in the CUDA sbsa repo included in base image
+# Install additional system dependencies (ffmpeg for whisperx audio loading)
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        python3.12 \
-        python3.12-dev \
-        python3.12-venv \
-        python3-pip \
         ffmpeg \
         sox libsox-fmt-all \
-        git \
-        curl \
-        build-essential \
-        libnvpl-lapack0 \
-        libnvpl-blas0 \
-    && rm -rf /var/lib/apt/lists/* \
-    && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
-    && ln -sf /usr/bin/python3.12 /usr/bin/python
+    && rm -rf /var/lib/apt/lists/*
 
-# Set library path to find NVPL (usually in /usr/lib/aarch64-linux-gnu)
-ENV LD_LIBRARY_PATH="/usr/lib/aarch64-linux-gnu:${LD_LIBRARY_PATH}"
-
-# Create and activate virtual environment
-RUN python3 -m venv /opt/venv
-ENV PATH="/opt/venv/bin:$PATH"
-
-# Upgrade pip
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel
-
-# Install PyTorch with CUDA 13.0 from Jetson AI Lab pip server (for Thor/SBSA)
-# IMPORTANT: Use only the Jetson index for torch to avoid getting CPU-only wheels from PyPI
-RUN pip install --no-cache-dir \
-    torch==2.9.1 \
-    torchaudio==2.9.1 \
-    --index-url https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple/
-
-# Verify CUDA torch was installed (not CPU version)
-RUN python3 -c "import torch; assert 'cpu' not in torch.__version__, 'CPU-only torch installed!'; print('torch', torch.__version__, 'OK')"
+# PyTorch and torchaudio are already installed in the NGC container
+# Verify they're working
+RUN python3 -c "import torch; print('PyTorch:', torch.__version__); import torchaudio; print('torchaudio:', torchaudio.__version__)"
 
 # Copy requirements
 COPY requirements/base.txt requirements/
 COPY requirements/transcription.txt requirements/
 
 # Install WhisperX and dependencies
-RUN pip install --no-cache-dir faster-whisper==1.1.0
+RUN pip install --no-cache-dir faster-whisper
 RUN pip install --no-cache-dir git+https://github.com/m-bain/whisperx.git --no-deps
 
 # Install pyannote for speaker diarization
-# Use git master to get torchaudio 2.9.x compatibility fixes
-RUN pip install --no-cache-dir git+https://github.com/pyannote/pyannote-audio.git
+# Check torchaudio version and install compatible pyannote
+RUN pip install --no-cache-dir pyannote.audio || \
+    pip install --no-cache-dir git+https://github.com/pyannote/pyannote-audio.git
 
 # Install minimal WhisperX deps and other transcription dependencies
 RUN pip install --no-cache-dir pandas nltk more-itertools
@@ -88,4 +62,4 @@ COPY src/__init__.py src/
 
 EXPOSE 8001
 
-CMD ["python", "-m", "uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8001"]
+CMD ["python3", "-m", "uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8001"]
