@@ -25,30 +25,38 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sox libsox-fmt-all \
     && rm -rf /var/lib/apt/lists/*
 
-# Install torchaudio from Jetson pip server (matches base PyTorch)
-RUN pip install --no-cache-dir torchaudio \
-    --index-url https://pypi.jetson-ai-lab.io/jp6/cu128/+simple/ \
-    --extra-index-url https://pypi.org/simple
+# Verify base image has CUDA PyTorch
+RUN python3 -c "import torch; print('Base PyTorch:', torch.__version__, 'CUDA:', torch.cuda.is_available())"
 
-# Verify PyTorch has CUDA
-RUN python3 -c "import torch; print('PyTorch:', torch.__version__, 'CUDA:', torch.cuda.is_available())"
+# Pin torch version to prevent overwrites, then install audio deps
+# Use --no-deps on packages that might pull torch
+RUN TORCH_VERSION=$(python3 -c "import torch; print(torch.__version__)") && \
+    pip install --no-cache-dir --no-deps torchaudio && \
+    pip install --no-cache-dir soundfile
+
+# Verify CUDA still works after torchaudio
+RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA broken after torchaudio!'; print('CUDA OK')"
 
 # Copy requirements
 COPY requirements/base.txt requirements/
 COPY requirements/transcription.txt requirements/
 
-# Install WhisperX and dependencies
+# Install WhisperX dependencies (no-deps to avoid torch overwrite)
 RUN pip install --no-cache-dir faster-whisper
 RUN pip install --no-cache-dir git+https://github.com/m-bain/whisperx.git --no-deps
 
-# Install pyannote for speaker diarization
-# Check torchaudio version and install compatible pyannote
-RUN pip install --no-cache-dir pyannote.audio || \
-    pip install --no-cache-dir git+https://github.com/pyannote/pyannote-audio.git
+# Install pyannote with --no-deps, then install its deps manually (excluding torch)
+RUN pip install --no-cache-dir --no-deps pyannote.audio pyannote.core pyannote.database pyannote.pipeline
+RUN pip install --no-cache-dir asteroid-filterbanks einops hmmlearn lightning \
+    omegaconf pytorch-metric-learning rich scikit-learn scipy \
+    semver tensorboardX speechbrain 2>/dev/null || true
+
+# Verify CUDA still works after all installs
+RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA broken!'; print('Final CUDA check: OK')"
 
 # Install minimal WhisperX deps and other transcription dependencies
 RUN pip install --no-cache-dir pandas nltk more-itertools
-RUN pip install --no-cache-dir -r requirements/transcription.txt 2>/dev/null || true
+RUN pip install --no-cache-dir --no-deps -r requirements/transcription.txt 2>/dev/null || true
 
 # Copy only necessary code
 COPY src/api/app.py src/api/
