@@ -25,6 +25,7 @@ WORKDIR /workspace
 RUN apt-get update && apt-get install -y --no-install-recommends \
         gnupg2 \
         ca-certificates \
+        curl \
     && curl -fsSL https://developer.download.nvidia.com/hpc-sdk/ubuntu/DEB-GPG-KEY-NVIDIA-HPC-SDK | gpg --dearmor -o /usr/share/keyrings/nvidia-hpcsdk-keyring.gpg \
     && echo "deb [signed-by=/usr/share/keyrings/nvidia-hpcsdk-keyring.gpg] https://developer.download.nvidia.com/hpc-sdk/ubuntu/aarch64 /" > /etc/apt/sources.list.d/nvidia-hpcsdk.list \
     && apt-get update
