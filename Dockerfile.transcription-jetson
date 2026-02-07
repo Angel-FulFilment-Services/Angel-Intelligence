@@ -35,8 +35,16 @@ RUN pip install --no-cache-dir --no-deps pyannote.audio pyannote.core pyannote.d
 RUN pip install --no-cache-dir --no-deps asteroid-filterbanks speechbrain
 RUN pip install --no-cache-dir einops hmmlearn optuna tensorboardX
 
-# Install base app dependencies
-RUN pip install --no-cache-dir mysql-connector-python httpx aiofiles python-multipart
+# Install base app dependencies (avoiding pydantic/torch overwrites)
+RUN pip install --no-cache-dir \
+    mysql-connector-python \
+    httpx \
+    aiofiles \
+    python-multipart \
+    boto3 \
+    python-dotenv \
+    requests \
+    "numpy>=1.19.0,<2.0.0"
 
 # Final CUDA check
 RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA broken!'; print('Final CUDA: OK')"
