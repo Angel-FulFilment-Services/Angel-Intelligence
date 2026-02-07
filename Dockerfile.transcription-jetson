@@ -7,8 +7,9 @@
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-# NVIDIA CUDA 13.0 base image with cuDNN for ARM64 (Thor/Grace Hopper)
-FROM nvcr.io/nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
+# NVIDIA CUDA 13.0 devel image with cuDNN for ARM64 (Thor/Grace Hopper)
+# Must match CUDA version of the torch wheels from pypi.jetson-ai-lab.io/sbsa/cu130
+FROM nvidia/cuda:13.0.1-cudnn-devel-ubuntu24.04
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Thor/Jetson)"
 LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64 CUDA 13.0"
@@ -20,8 +21,16 @@ ENV ANGEL_ENV=production
 
 WORKDIR /workspace
 
-# Install system dependencies including Python 3.12, ffmpeg, and build tools
+# Add NVIDIA HPC SDK repo for NVPL (required by SBSA PyTorch wheels)
 RUN apt-get update && apt-get install -y --no-install-recommends \
+        gnupg2 \
+        ca-certificates \
+    && curl -fsSL https://developer.download.nvidia.com/hpc-sdk/ubuntu/DEB-GPG-KEY-NVIDIA-HPC-SDK | gpg --dearmor -o /usr/share/keyrings/nvidia-hpcsdk-keyring.gpg \
+    && echo "deb [signed-by=/usr/share/keyrings/nvidia-hpcsdk-keyring.gpg] https://developer.download.nvidia.com/hpc-sdk/ubuntu/aarch64 /" > /etc/apt/sources.list.d/nvidia-hpcsdk.list \
+    && apt-get update
+
+# Install system dependencies including Python 3.12, ffmpeg, build tools, and NVPL
+RUN apt-get install -y --no-install-recommends \
         python3.12 \
         python3.12-dev \
         python3.12-venv \
@@ -31,9 +40,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         git \
         curl \
         build-essential \
+        nvpl \
     && rm -rf /var/lib/apt/lists/* \
     && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
     && ln -sf /usr/bin/python3.12 /usr/bin/python
+
+# Set library path to find NVPL
+ENV LD_LIBRARY_PATH="/opt/nvidia/nvpl/lib:${LD_LIBRARY_PATH}"
 
 # Create and activate virtual environment
 RUN python3 -m venv /opt/venv
