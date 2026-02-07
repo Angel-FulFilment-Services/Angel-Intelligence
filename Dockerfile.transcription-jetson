@@ -47,9 +47,25 @@ RUN pip install --no-cache-dir git+https://github.com/m-bain/whisperx.git --no-d
 
 # Install pyannote with --no-deps, then install its deps manually (excluding torch)
 RUN pip install --no-cache-dir --no-deps pyannote.audio pyannote.core pyannote.database pyannote.pipeline
-RUN pip install --no-cache-dir asteroid-filterbanks einops hmmlearn lightning \
-    omegaconf pytorch-metric-learning rich scikit-learn scipy \
-    semver tensorboardX speechbrain 2>/dev/null || true
+
+# Check CUDA after pyannote core
+RUN python3 -c "import torch; print('After pyannote:', torch.cuda.is_available())"
+
+# Install deps one by one to find the breaker
+RUN pip install --no-cache-dir asteroid-filterbanks einops hmmlearn
+RUN python3 -c "import torch; print('After batch 1:', torch.cuda.is_available())"
+
+RUN pip install --no-cache-dir omegaconf pytorch-metric-learning rich scikit-learn scipy semver
+RUN python3 -c "import torch; print('After batch 2:', torch.cuda.is_available())"
+
+RUN pip install --no-cache-dir tensorboardX 2>/dev/null || true
+RUN python3 -c "import torch; print('After tensorboardX:', torch.cuda.is_available())"
+
+RUN pip install --no-cache-dir --no-deps lightning 2>/dev/null || true
+RUN python3 -c "import torch; print('After lightning:', torch.cuda.is_available())"
+
+RUN pip install --no-cache-dir --no-deps speechbrain 2>/dev/null || true
+RUN python3 -c "import torch; print('After speechbrain:', torch.cuda.is_available())"
 
 # Verify CUDA still works after all installs
 RUN python3 -c "import torch; assert torch.cuda.is_available(), 'CUDA broken!'; print('Final CUDA check: OK')"
