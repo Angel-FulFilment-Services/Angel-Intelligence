@@ -22,11 +22,12 @@ ENV ANGEL_ENV=production
 
 WORKDIR /workspace
 
-# Install additional system dependencies
+# Install additional system dependencies (ffmpeg required by whisperx for audio loading)
 RUN rm -rf /var/lib/apt/lists/* && \
     apt-get clean && \
     apt-get update --fix-missing && \
     apt-get install -y --no-install-recommends \
+        ffmpeg \
         sox libsox-fmt-all \
     && rm -rf /var/lib/apt/lists/*
 
