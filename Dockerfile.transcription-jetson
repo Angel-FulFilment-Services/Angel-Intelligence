@@ -7,8 +7,8 @@
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-# NVIDIA CUDA 13.0 base image for ARM64 (Thor/Grace Hopper)
-FROM nvcr.io/nvidia/cuda:13.0.1-runtime-ubuntu24.04
+# NVIDIA CUDA 13.0 base image with cuDNN for ARM64 (Thor/Grace Hopper)
+FROM nvcr.io/nvidia/cuda:13.0.1-cudnn-runtime-ubuntu24.04
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Thor/Jetson)"
 LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64 CUDA 13.0"
