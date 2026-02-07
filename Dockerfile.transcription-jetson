@@ -28,8 +28,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
         sox libsox-fmt-all \
     && rm -rf /var/lib/apt/lists/*
 
+# Set CUDA library paths (NGC container has CUDA in /usr/local/cuda)
+ENV LD_LIBRARY_PATH="/usr/local/cuda/lib64:/usr/local/cuda/compat:${LD_LIBRARY_PATH}"
+
 # PyTorch is already installed in the NGC container
-# Install torchaudio from Jetson AI Lab pip server (compatible with container's PyTorch)
+# Check where CUDA libs are and install compatible torchaudio
+RUN find /usr -name "libcudart*" 2>/dev/null | head -5 || echo "No libcudart found"
 RUN pip install --no-cache-dir torchaudio --index-url https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple/
 
 # Verify they're working
