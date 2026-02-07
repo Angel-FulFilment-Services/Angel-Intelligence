@@ -1,62 +1,68 @@
 # ==============================================================================
-# Angel Intelligence - Transcription Pod Dockerfile (Jetson ARM64)
+# Angel Intelligence - Transcription Pod Dockerfile (Jetson ARM64 / Thor)
 # ==============================================================================
-# Uses dustynv/wyoming-whisper which has faster-whisper + ctranslate2 CUDA pre-built!
-# No compilation required - instant build.
+# For L4T R38 / JetPack 7 with CUDA 13.0
+# Uses pip wheels from pypi.jetson-ai-lab.io/sbsa/cu130
 #
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-# Use dustynv PyTorch image with PyTorch 2.7 + torchaudio 2.7 (compatible with pyannote-audio 3.3.x)
-# For L4T R38 (JetPack 7), use r36.4 images which are backward compatible
-# See: https://hub.docker.com/r/dustynv/pytorch/tags
-FROM dustynv/pytorch:2.7-r36.4.0-cu128-24.04
+# Ubuntu 24.04 base for JetPack 7 / CUDA 13.0 compatibility
+FROM ubuntu:24.04
 
-LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Jetson)"
-LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
+LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Thor/Jetson)"
+LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64 CUDA 13.0"
 
-# Fix ARM64 OpenMP TLS issue
-ENV LD_PRELOAD=/usr/lib/aarch64-linux-gnu/libgomp.so.1
+# Prevent interactive prompts during package installation
+ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV ANGEL_ENV=production
 
 WORKDIR /workspace
 
-# Install additional system dependencies (ffmpeg required by whisperx for audio loading)
-RUN rm -rf /var/lib/apt/lists/* && \
-    apt-get clean && \
-    apt-get update --fix-missing && \
-    apt-get install -y --no-install-recommends \
+# Install system dependencies including Python 3.12, ffmpeg, and build tools
+RUN apt-get update && apt-get install -y --no-install-recommends \
+        python3.12 \
+        python3.12-dev \
+        python3.12-venv \
+        python3-pip \
         ffmpeg \
         sox libsox-fmt-all \
-    && rm -rf /var/lib/apt/lists/*
+        git \
+        curl \
+        build-essential \
+    && rm -rf /var/lib/apt/lists/* \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python3 \
+    && ln -sf /usr/bin/python3.12 /usr/bin/python
+
+# Create and activate virtual environment
+RUN python3 -m venv /opt/venv
+ENV PATH="/opt/venv/bin:$PATH"
+
+# Upgrade pip
+RUN pip install --no-cache-dir --upgrade pip setuptools wheel
+
+# Install PyTorch with CUDA 13.0 from Jetson AI Lab pip server (for Thor/SBSA)
+RUN pip install --no-cache-dir \
+    torch==2.9.1 \
+    torchaudio==2.9.1 \
+    --index-url https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple/ \
+    --extra-index-url https://pypi.org/simple
 
 # Copy requirements
 COPY requirements/base.txt requirements/
 COPY requirements/transcription.txt requirements/
 
-# Reset pip index to use PyPI as primary, Jetson as extra
-# This fixes setuptools not found during build
-ENV PIP_INDEX_URL=https://pypi.org/simple
-ENV PIP_EXTRA_INDEX_URL=http://jetson.webredirect.org/jp6/cu122
-
-# faster-whisper and ctranslate2 already in base image!
-# Just install WhisperX and pyannote for alignment + diarization
+# Install WhisperX and dependencies
+RUN pip install --no-cache-dir faster-whisper==1.1.0
 RUN pip install --no-cache-dir git+https://github.com/m-bain/whisperx.git --no-deps
 
-# Install pyannote for speaker diarization
+# Install pyannote for speaker diarization (now compatible with torchaudio 2.9.1)
 RUN pip install --no-cache-dir pyannote.audio
 
-# Install minimal WhisperX deps
+# Install minimal WhisperX deps and other transcription dependencies
 RUN pip install --no-cache-dir pandas nltk more-itertools
-
-# Install remaining transcription dependencies
 RUN pip install --no-cache-dir -r requirements/transcription.txt 2>/dev/null || true
-
-# Fix all bundled libgomp conflicts - find and replace ALL of them with system libgomp
-RUN find /usr/local/lib -name "libgomp*.so*" -type f 2>/dev/null | while read f; do \
-        rm -f "$f" && ln -sf /usr/lib/aarch64-linux-gnu/libgomp.so.1 "$f"; \
-    done || true
 
 # Copy only necessary code
 COPY src/api/app.py src/api/
