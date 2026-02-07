@@ -43,11 +43,14 @@ ENV PATH="/opt/venv/bin:$PATH"
 RUN pip install --no-cache-dir --upgrade pip setuptools wheel
 
 # Install PyTorch with CUDA 13.0 from Jetson AI Lab pip server (for Thor/SBSA)
+# IMPORTANT: Use only the Jetson index for torch to avoid getting CPU-only wheels from PyPI
 RUN pip install --no-cache-dir \
     torch==2.9.1 \
     torchaudio==2.9.1 \
-    --index-url https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple/ \
-    --extra-index-url https://pypi.org/simple
+    --index-url https://pypi.jetson-ai-lab.io/sbsa/cu130/+simple/
+
+# Verify CUDA torch was installed (not CPU version)
+RUN python3 -c "import torch; assert 'cpu' not in torch.__version__, 'CPU-only torch installed!'; print('torch', torch.__version__, 'OK')"
 
 # Copy requirements
 COPY requirements/base.txt requirements/
@@ -57,8 +60,9 @@ COPY requirements/transcription.txt requirements/
 RUN pip install --no-cache-dir faster-whisper==1.1.0
 RUN pip install --no-cache-dir git+https://github.com/m-bain/whisperx.git --no-deps
 
-# Install pyannote for speaker diarization (now compatible with torchaudio 2.9.1)
-RUN pip install --no-cache-dir pyannote.audio
+# Install pyannote for speaker diarization
+# Use git master to get torchaudio 2.9.x compatibility fixes
+RUN pip install --no-cache-dir git+https://github.com/pyannote/pyannote-audio.git
 
 # Install minimal WhisperX deps and other transcription dependencies
 RUN pip install --no-cache-dir pandas nltk more-itertools
