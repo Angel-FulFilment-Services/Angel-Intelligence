@@ -35,6 +35,10 @@ RUN pip install --no-cache-dir --no-deps pyannote.audio pyannote.core pyannote.d
 RUN pip install --no-cache-dir --no-deps asteroid-filterbanks speechbrain
 RUN pip install --no-cache-dir einops hmmlearn optuna tensorboardX
 
+# Install lightning with --no-deps to avoid torch overwrite, then its deps
+RUN pip install --no-cache-dir --no-deps lightning pytorch-lightning
+RUN pip install --no-cache-dir fsspec torchmetrics
+
 # Install base app dependencies (avoiding pydantic/torch overwrites)
 RUN pip install --no-cache-dir \
     mysql-connector-python \
