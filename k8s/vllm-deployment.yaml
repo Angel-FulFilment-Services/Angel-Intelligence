@@ -33,9 +33,9 @@ data:
   
   # GPU memory utilization (0.0-1.0)
   # 72B AWQ model: 42GB + 7GB compile/graphs + KV cache
-  # 0.40 = ~49GB budget. Gives 43GB KV cache (16x concurrency)
-  # Thor 128GB: leaves ~73GB for transcription + system
-  GPU_MEMORY_UTILIZATION: "0.40"
+  # 0.50 = 61GB budget. 42GB model + 7GB compile + 12GB KV cache
+  # Thor 128GB: leaves ~61GB for transcription + system
+  GPU_MEMORY_UTILIZATION: "0.50"
   
   # Number of tensor parallel GPUs (set higher if multi-GPU)
   TENSOR_PARALLEL_SIZE: "1"
@@ -78,22 +78,16 @@ spec:
       nodeSelector:
         nvidia.com/gpu.product: "AGX-Thor"
       
-      # Required for init container to access host /proc/sys
+      # Required for dropping page caches before vLLM starts
+      # On Thor unified memory, NFS model reads fill page cache
+      # which competes with CUDA allocations
       hostPID: true
-      
-      # Init container to drop page caches before vLLM starts
-      # On Thor unified memory, crashed CUDA processes leave dirty pages
-      # in kernel buffer cache. This ensures vLLM always gets clean memory.
-      initContainers:
-        - name: drop-caches
-          image: busybox
-          command: ["sh", "-c", "echo 'Before:' && cat /proc/meminfo | head -5 && sync && echo 3 > /proc/sys/vm/drop_caches && echo 'After:' && cat /proc/meminfo | head -5 && echo 'Caches dropped successfully'"]
-          securityContext:
-            privileged: true
 
       containers:
         - name: vllm
           image: 192.168.9.50:5000/angel-intelligence:vllm-arm64
+          securityContext:
+            privileged: true
           ports:
             - containerPort: 8000
               name: http
@@ -161,32 +155,25 @@ spec:
                   name: vllm-config
                   key: LORA_MODULES_PATH
           command:
-            - "python3"
-            - "-m"
-            - "vllm.entrypoints.openai.api_server"
-          args:
-            - "--model"
-            - "$(MODEL_NAME)"
-            - "--served-model-name"
-            - "Qwen/Qwen2.5-72B-Instruct-AWQ"
-            - "--max-model-len"
-            - "$(MAX_MODEL_LEN)"
-            - "--gpu-memory-utilization"
-            - "$(GPU_MEMORY_UTILIZATION)"
-            - "--tensor-parallel-size"
-            - "$(TENSOR_PARALLEL_SIZE)"
-            - "--max-num-seqs"
-            - "$(MAX_NUM_SEQS)"
-            - "--enable-lora"
-            - "--max-loras"
-            - "$(MAX_LORAS)"
-            - "--max-lora-rank"
-            - "$(MAX_LORA_RANK)"
-            - "--trust-remote-code"
-            - "--host"
-            - "0.0.0.0"
-            - "--port"
-            - "8000"
+            - "sh"
+            - "-c"
+            - |
+              echo "Dropping page caches before vLLM start..."
+              sync && echo 3 > /proc/sys/vm/drop_caches
+              echo "Caches dropped. Starting vLLM..."
+              exec python3 -m vllm.entrypoints.openai.api_server \
+                --model "$MODEL_NAME" \
+                --served-model-name "Qwen/Qwen2.5-72B-Instruct-AWQ" \
+                --max-model-len "$MAX_MODEL_LEN" \
+                --gpu-memory-utilization "$GPU_MEMORY_UTILIZATION" \
+                --tensor-parallel-size "$TENSOR_PARALLEL_SIZE" \
+                --max-num-seqs "$MAX_NUM_SEQS" \
+                --enable-lora \
+                --max-loras "$MAX_LORAS" \
+                --max-lora-rank "$MAX_LORA_RANK" \
+                --trust-remote-code \
+                --host 0.0.0.0 \
+                --port 8000
           volumeMounts:
             - name: models-nfs
               mountPath: /models
