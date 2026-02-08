@@ -32,10 +32,10 @@ data:
   MAX_MODEL_LEN: "8192"
   
   # GPU memory utilization (0.0-1.0)
-  # 72B AWQ model uses ~42GB. On Thor (128GB unified):
-  # 0.40 = 51GB (42GB model + 9GB KV cache)
-  # Leaves ~77GB for transcription (WhisperX ~5-10GB) and system
-  GPU_MEMORY_UTILIZATION: "0.40"
+  # 72B AWQ model uses ~42GB. With enforce-eager, no CUDA graphs.
+  # 0.36 = ~44GB budget. After model, leaves small KV cache.
+  # Thor 128GB: ~75GB vLLM total, leaves ~48GB for transcription + system
+  GPU_MEMORY_UTILIZATION: "0.36"
   
   # Number of tensor parallel GPUs (set higher if multi-GPU)
   TENSOR_PARALLEL_SIZE: "1"
@@ -167,6 +167,7 @@ spec:
             - "$(MAX_LORAS)"
             - "--max-lora-rank"
             - "$(MAX_LORA_RANK)"
+            - "--enforce-eager"
             - "--trust-remote-code"
             - "--host"
             - "0.0.0.0"
