@@ -29,7 +29,10 @@ data:
   TRANSFORMERS_OFFLINE: "1"
   
   # Maximum model length (context window)
-  MAX_MODEL_LEN: "8192"
+  # Qwen2.5-72B supports up to 131K natively
+  # 32K allows long transcripts without truncation
+  # KV cache is shared pool - longer seqs just mean fewer concurrent
+  MAX_MODEL_LEN: "32768"
   
   # GPU memory utilization (0.0-1.0)
   # 72B AWQ model: 42GB + 7GB compile/graphs + KV cache
