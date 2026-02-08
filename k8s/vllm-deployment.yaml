@@ -154,6 +154,8 @@ spec:
           args:
             - "--model"
             - "$(MODEL_NAME)"
+            - "--served-model-name"
+            - "Qwen/Qwen2.5-72B-Instruct-AWQ"
             - "--max-model-len"
             - "$(MAX_MODEL_LEN)"
             - "--gpu-memory-utilization"

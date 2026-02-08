@@ -404,8 +404,12 @@ class TranscriptionService:
         # Load diarization model if needed
         if self._diarize_model is None:
             logger.info("Loading pyannote diarization model...")
+            # Set HF token via env var - avoids version conflicts between
+            # WhisperX (use_auth_token) and newer huggingface_hub (token)
+            import os
+            if self.hf_token:
+                os.environ["HF_TOKEN"] = self.hf_token
             self._diarize_model = DiarizationPipeline(
-                token=self.hf_token,
                 device=self.device
             )
             logger.info("Pyannote diarization model loaded")
