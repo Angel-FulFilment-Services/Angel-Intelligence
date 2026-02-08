@@ -517,7 +517,7 @@ class TranscriptionService:
         
         # Force garbage collection and clear CUDA cache
         gc.collect()
-        if torch.cuda.is_available():
+        if TORCH_AVAILABLE and torch.cuda.is_available():
             torch.cuda.empty_cache()
         
         logger.info("Transcription resources unloaded")
