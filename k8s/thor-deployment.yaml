@@ -86,24 +86,7 @@ data:
   enable-model-hot-reload: "true"
 
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: angel-intelligence-models
-  namespace: default
-  labels:
-    app: angel-intelligence
-    tier: thor
-spec:
-  accessModes:
-    - ReadWriteMany
-  # Use existing manually-bound PV
-  storageClassName: ""
-  volumeName: angel-models-pv
-  resources:
-    requests:
-      storage: 100Gi  # 32B + 14B + Whisper large + diarization
-
+# PVC already created via pv-models.yaml (angel-intelligence-models bound to NFS)
 ---
 # =============================================================================
 # Thor Batch Worker Deployment
