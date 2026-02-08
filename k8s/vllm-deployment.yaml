@@ -33,8 +33,9 @@ data:
   
   # GPU memory utilization (0.0-1.0)
   # 72B AWQ model uses ~42GB. On Thor (128GB unified):
-  # 0.50 = 64GB (42GB model + 22GB KV cache)
-  GPU_MEMORY_UTILIZATION: "0.50"
+  # 0.40 = 51GB (42GB model + 9GB KV cache)
+  # Leaves ~77GB for transcription (WhisperX ~5-10GB) and system
+  GPU_MEMORY_UTILIZATION: "0.40"
   
   # Number of tensor parallel GPUs (set higher if multi-GPU)
   TENSOR_PARALLEL_SIZE: "1"
@@ -175,14 +176,15 @@ spec:
             - name: models-nfs
               mountPath: /models
           resources:
+            # NOTE: nvidia.com/gpu removed to allow GPU sharing with transcription pod
+            # GPU access via runtimeClassName: nvidia (Thor unified memory)
+            # vLLM's gpu_memory_utilization controls its allocation
             requests:
               memory: "24Gi"
               cpu: "4"
-              nvidia.com/gpu: "1"
             limits:
-              memory: "32Gi"
+              memory: "64Gi"
               cpu: "8"
-              nvidia.com/gpu: "1"
           # Startup probe: allows model to load before liveness/readiness kick in
           # 72B AWQ model can take 10-15 minutes to load on Thor
           startupProbe:
