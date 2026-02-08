@@ -32,9 +32,9 @@ data:
   MAX_MODEL_LEN: "8192"
   
   # GPU memory utilization (0.0-1.0)
-  # For 2 pods on Thor (128GB unified): 0.30 each = ~37GB per pod
-  # For 1 pod: can use 0.60 for more KV cache headroom
-  GPU_MEMORY_UTILIZATION: "0.30"
+  # 72B AWQ model uses ~42GB. On Thor (128GB unified):
+  # 0.50 = 64GB (42GB model + 22GB KV cache)
+  GPU_MEMORY_UTILIZATION: "0.50"
   
   # Number of tensor parallel GPUs (set higher if multi-GPU)
   TENSOR_PARALLEL_SIZE: "1"
