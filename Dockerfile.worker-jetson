@@ -45,5 +45,6 @@ RUN python3.9 -m spacy download en_core_web_sm
 
 # Copy application code
 COPY src/ src/
+COPY call_analysis_config.json .
 
 CMD ["python3.9", "-m", "src.worker.worker"]

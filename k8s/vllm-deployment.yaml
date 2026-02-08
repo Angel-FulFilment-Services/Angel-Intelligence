@@ -78,6 +78,16 @@ spec:
       nodeSelector:
         nvidia.com/gpu.product: "AGX-Thor"
       
+      # Init container to drop page caches before vLLM starts
+      # On Thor unified memory, crashed CUDA processes leave dirty pages
+      # in kernel buffer cache. This ensures vLLM always gets clean memory.
+      initContainers:
+        - name: drop-caches
+          image: busybox
+          command: ["sh", "-c", "sync && echo 3 > /proc/sys/vm/drop_caches && echo 'Caches dropped'"]
+          securityContext:
+            privileged: true
+
       containers:
         - name: vllm
           image: 192.168.9.50:5000/angel-intelligence:vllm-arm64
