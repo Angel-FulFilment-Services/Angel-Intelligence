@@ -8,7 +8,7 @@
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-FROM whisperx:r38.3-complete
+FROM whisperx:r38.3.arm64-sbsa-cu130-24.04-transformers
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Thor/Jetson)"
 LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
