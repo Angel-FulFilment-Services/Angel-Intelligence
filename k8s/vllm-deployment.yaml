@@ -52,20 +52,6 @@ data:
   LORA_MODULES_PATH: "/models/adapters"
 
 ---
-apiVersion: v1
-kind: PersistentVolumeClaim
-metadata:
-  name: vllm-model-cache
-  namespace: default
-spec:
-  accessModes:
-    - ReadWriteOnce
-  resources:
-    requests:
-      storage: 100Gi  # Model cache (32B model is ~35GB compressed)
-  storageClassName: local-path
-
----
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -186,10 +172,8 @@ spec:
             - "--port"
             - "8000"
           volumeMounts:
-            - name: model-cache
+            - name: models-nfs
               mountPath: /models
-            - name: adapters
-              mountPath: /models/adapters
           resources:
             requests:
               memory: "24Gi"
@@ -224,11 +208,7 @@ spec:
             timeoutSeconds: 10
             failureThreshold: 3
       volumes:
-        - name: model-cache
-          persistentVolumeClaim:
-            claimName: vllm-model-cache
-        # Adapters volume - shared with training job
-        - name: adapters
+        - name: models-nfs
           persistentVolumeClaim:
             claimName: angel-intelligence-models
       # Schedule on Thor node (has GPU)
