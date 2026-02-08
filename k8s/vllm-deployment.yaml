@@ -32,10 +32,10 @@ data:
   MAX_MODEL_LEN: "8192"
   
   # GPU memory utilization (0.0-1.0)
-  # 72B AWQ model: 42GB + 0.5GB CUDA graphs + KV cache
-  # 0.38 = ~47GB budget. After model+graphs, ~4GB KV cache.
-  # Thor 128GB: leaves ~76GB for transcription + system
-  GPU_MEMORY_UTILIZATION: "0.38"
+  # 72B AWQ model: 42GB + 7GB compile/graphs + KV cache
+  # 0.40 = ~49GB budget. Gives 43GB KV cache (16x concurrency)
+  # Thor 128GB: leaves ~73GB for transcription + system
+  GPU_MEMORY_UTILIZATION: "0.40"
   
   # Number of tensor parallel GPUs (set higher if multi-GPU)
   TENSOR_PARALLEL_SIZE: "1"
@@ -78,13 +78,16 @@ spec:
       nodeSelector:
         nvidia.com/gpu.product: "AGX-Thor"
       
+      # Required for init container to access host /proc/sys
+      hostPID: true
+      
       # Init container to drop page caches before vLLM starts
       # On Thor unified memory, crashed CUDA processes leave dirty pages
       # in kernel buffer cache. This ensures vLLM always gets clean memory.
       initContainers:
         - name: drop-caches
           image: busybox
-          command: ["sh", "-c", "sync && echo 3 > /proc/sys/vm/drop_caches && echo 'Caches dropped'"]
+          command: ["sh", "-c", "echo 'Before:' && cat /proc/meminfo | head -5 && sync && echo 3 > /proc/sys/vm/drop_caches && echo 'After:' && cat /proc/meminfo | head -5 && echo 'Caches dropped successfully'"]
           securityContext:
             privileged: true
 
