@@ -2445,4 +2445,10 @@ CRITICAL RULES:
         """Check if analysis service is available."""
         if self.use_mock:
             return True
+        # vLLM API mode - available if URL is configured
+        if self.llm_api_url:
+            return True
+        if self.audio_analysis_api_url:
+            return True
+        # Local mode - needs Qwen Omni
         return QWEN_OMNI_AVAILABLE and QWEN_OMNI_UTILS_AVAILABLE

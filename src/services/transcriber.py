@@ -405,7 +405,7 @@ class TranscriptionService:
         if self._diarize_model is None:
             logger.info("Loading pyannote diarization model...")
             self._diarize_model = DiarizationPipeline(
-                use_auth_token=self.hf_token,
+                token=self.hf_token,
                 device=self.device
             )
             logger.info("Pyannote diarization model loaded")
