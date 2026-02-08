@@ -1,14 +1,14 @@
 # ==============================================================================
 # Angel Intelligence - Transcription Pod Dockerfile (Jetson ARM64 / Thor)
 # ==============================================================================
-# Uses dustynv/whisperx which has WhisperX + PyAnnote + CUDA all working
-# Build whisperx first: jetson-containers build whisperx
+# Uses whisperx:r38.3-complete built via jetson-containers with WhisperX + CUDA
+# Base image already has: torch 2.11, torchaudio, pyannote, faster-whisper,
+# whisperx, ffmpeg, plus torchaudio/torch.load compatibility patches.
 #
 # Build: docker build -f Dockerfile.transcription-jetson -t angel-intelligence:transcription-arm64 .
 # Run:   docker run --runtime nvidia -p 8001:8001 angel-intelligence:transcription-arm64
 
-# Use whisperx image from local registry (built via jetson-containers)
-FROM 192.168.9.50:5000/angel-intelligence:whisperx-arm64
+FROM whisperx:r38.3-complete
 
 LABEL org.opencontainers.image.title="Angel Intelligence Transcription (Thor/Jetson)"
 LABEL org.opencontainers.image.description="Shared WhisperX transcription service for ARM64"
@@ -16,37 +16,41 @@ LABEL org.opencontainers.image.description="Shared WhisperX transcription servic
 ENV DEBIAN_FRONTEND=noninteractive
 ENV PYTHONUNBUFFERED=1
 ENV ANGEL_ENV=production
+ENV WHISPER_MODEL=medium
+ENV HUGGINGFACE_TOKEN=""
 
 WORKDIR /workspace
 
-# Install app dependencies (whisperx base already has torch, torchaudio, pyannote, faster-whisper)
+# Install app dependencies (base image already has torch, whisperx, pyannote, ffmpeg)
 RUN pip install --no-cache-dir \
+    uvicorn[standard] \
+    fastapi \
+    pydantic-settings \
     mysql-connector-python \
     httpx \
     aiofiles \
     python-multipart \
-    boto3
+    boto3 \
+    pandas
 
-# Verify everything works
-RUN python3 -c "import torch; assert torch.cuda.is_available(), 'No CUDA!'; print('CUDA OK')"
+# Verify core dependencies work
+RUN python3 -c "import whisperx; print('whisperx OK')"
 RUN python3 -c "from faster_whisper import WhisperModel; print('faster-whisper OK')"
-RUN python3 -c "from pyannote.audio import Pipeline; print('pyannote OK')"
 
 # Copy application code
-COPY src/ src/
-
-EXPOSE 8001
-
-CMD ["python3", "-m", "uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]
-COPY src/api/routes_live.py src/api/
+COPY src/__init__.py src/
 COPY src/api/__init__.py src/api/
+COPY src/api/app.py src/api/
+COPY src/api/auth.py src/api/
+COPY src/api/routes.py src/api/
+COPY src/api/routes_live.py src/api/
 COPY src/config/ src/config/
 COPY src/database/ src/database/
 COPY src/services/ src/services/
-COPY src/__init__.py src/
 
 EXPOSE 8001
 
-# Run with multiple workers for concurrent request handling
-# Thread pool handles GPU work, workers handle I/O parallelism
-CMD ["python3", "-m", "uvicorn", "src.api:app", "--host", "0.0.0.0", "--port", "8001", "--workers", "2"]
+# Run transcription service
+# Single worker with thread pool - GPU serialises internally,
+# but I/O and preprocessing can overlap across requests
+CMD ["python3", "-m", "uvicorn", "src.api.app:create_app", "--factory", "--host", "0.0.0.0", "--port", "8001"]
